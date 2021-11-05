@@ -1,4 +1,3 @@
-#include <ostream>
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -18,6 +17,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <ostream>
 #include <queue>
 #include <random>
 #include <set>
@@ -532,7 +532,7 @@ template <int max_n, int max_m> struct Graph {
     inline Slice<int> operator[](const int& v) const { return Slice<int>(edges.begin() + lefts[v], edges.begin() + lefts[v + 1]); }
 };
 
-// ========================= ライブラリここまで =========================
+// ========================== ライブラリここまで ==========================
 
 namespace input {
 constexpr auto N = 1000;             // タスク数
@@ -544,13 +544,25 @@ auto edges = Stack<Edge, 3000>();
 auto G = Graph<1000, 3000>();
 } // namespace input
 
+// ========================== common ==========================
+
 namespace common {
 struct FinishedTask {
     int task; // タスク番号
     int t;    // かかった時間
 };
-auto finished_task = array<Stack<FinishedTask, 300>, input::M>();
+auto finished_tasks = array<Stack<FinishedTask, 300>, input::M>();
+enum class TaskStatus { NotStarted, InProgress, Finished };
+auto task_status = array<TaskStatus, input::N>();
+auto member_status = array<int, input::M>(); // -1: 空き
+auto starting_times = array<int, input::M>();
+auto in_dims = array<int, input::N>(); // 入次数
+auto open_tasks = Stack<int, input::N>();
+auto open_members = Stack<int, input::N>();
+
 } // namespace common
+
+// ========================== prediction ==========================
 
 namespace prediction {
 // clang-format off
@@ -570,10 +582,11 @@ constexpr auto initial_expected_time_all = array<array<double, 41>, 21 - 10>{
 // clang-format on
 
 auto initial_expected_time = array<double, 41>();
-auto initial_expected_skill = array<double, 11>{10.34388673, 9.84151079, 9.40491307, 9.02080870, 8.67996031, 8.37518411,
-                                                8.10086558,  7.85121853, 7.62445622, 7.41485945, 7.22255002}; // [技能数 - 10] := スキルの予測値
-auto expected_time = array<array<double, input::M>, input::N>();                                              // 期待所要時間
-auto expected_skill = array<array<double, 20>, input::M>();                                                   // 各メンバーの能力の予測値
+constexpr auto initial_expected_skill =
+    array<double, 11>{10.34388673, 9.84151079, 9.40491307, 9.02080870, 8.67996031, 8.37518411,
+                      8.10086558,  7.85121853, 7.62445622, 7.41485945, 7.22255002}; // [技能数 - 10] := スキルの予測値
+auto expected_time = array<array<double, input::M>, input::N>();                    // 期待所要時間
+auto expected_skill = array<array<double, 20>, input::M>();                         // 各メンバーの能力の予測値
 inline void PrintExpectedSkill(const int& member) {
 #ifdef VISUALIZE
     cout << "#s " << member + 1;
@@ -604,25 +617,20 @@ inline void Update(const int& member) {
 
 } // namespace prediction
 
+// ========================== main loop ==========================
+
 void GreedySolution() {
-    enum class TaskStatus { NotStarted, InProgress, Finished };
-    auto task_status = array<TaskStatus, input::N>();
-    auto member_status = array<int, input::M>(); // -1: 空き
+    using namespace common;
     fill(member_status.begin(), member_status.end(), -1);
-    auto in_dims = array<int, input::N>(); // 入次数
     for (const auto& e : input::edges) {
         in_dims[e.to]++;
     }
-    auto open_tasks = Stack<int, input::N>();
     rep(task, input::N) {
         if (in_dims[task] == 0) {
             open_tasks.push(task);
         }
     }
-    auto open_members = Stack<int, input::N>();
     rep(member, input::M) { open_members.push(member); }
-    // open_tasks.Print();
-    // open_members.Print();
 
     // 1 日目
     {
@@ -639,6 +647,7 @@ void GreedySolution() {
             open_members.pop();
 
             member_status[member] = task;
+            starting_times[member] = 1;
             task_status[task] = TaskStatus::InProgress;
             cout << " " << member + 1 << " " << task + 1;
         }
@@ -650,7 +659,7 @@ void GreedySolution() {
         int member, task;
     };
     auto outputs = Stack<Output, 20>();
-    while (true) {
+    for (int day = 2;; day++) {
         int n;
         cin >> n;
         if (n == -1)
@@ -666,6 +675,7 @@ void GreedySolution() {
             auto task = member_status[member];
             member_status[member] = -1;
             task_status[task] = TaskStatus::Finished;
+            common::finished_tasks[member].push({task, day - starting_times[member]});
             // cerr << "task=" << task << endl;
             for (const auto& u : input::G[task]) {
                 // cerr << "u=" << u << endl;
@@ -692,6 +702,7 @@ void GreedySolution() {
             open_members.pop();
 
             member_status[member] = task;
+            starting_times[member] = day;
             task_status[task] = TaskStatus::InProgress;
             cout << " " << member + 1 << " " << task + 1;
         }

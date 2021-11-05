@@ -194,19 +194,20 @@ template <typename T> ostream& operator<<(ostream& os, const Vec2<T>& vec) {
 // 乱数
 struct Random {
     using ull = unsigned long long;
-    ull seed;
-    inline Random(ull aSeed) : seed(aSeed) { ASSERT(seed != 0ull, "Seed should not be 0."); }
-    const inline ull& next() {
-        seed ^= seed << 9;
-        seed ^= seed >> 7;
+    unsigned seed;
+    inline Random(const unsigned& seed_) : seed(seed_) { ASSERT(seed != 0u, "Seed should not be 0."); }
+    const inline unsigned& next() {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
         return seed;
     }
     // (0.0, 1.0)
-    inline double random() { return (double)next() / (double)ULLONG_MAX; }
+    inline double random() { return (double)next() * (1.0 / (double)0x100000000ull); }
     // [0, right)
-    inline int randint(const int right) { return next() % (ull)right; }
+    inline int randint(const int& right) { return (ull)next() * right >> 32; }
     // [left, right)
-    inline int randint(const int left, const int right) { return next() % (ull)(right - left) + left; }
+    inline int randint(const int& left, const int& right) { return ((ull)next() * (right - left) >> 32) + left; }
 };
 
 // 2 次元配列
@@ -559,6 +560,7 @@ auto starting_times = array<int, input::M>();
 auto in_dims = array<int, input::N>(); // 入次数
 auto open_tasks = Stack<int, input::N>();
 auto open_members = Stack<int, input::N>();
+auto rng = Random(42);
 
 } // namespace common
 
@@ -594,6 +596,26 @@ inline void PrintExpectedSkill(const int& member) {
     cout << endl;
 #endif
 }
+
+namespace mh {
+struct State {
+    array<double, 20> skill_base; // パラメータ
+    double sum_square_skill_base; // 2 乗和
+    double l2_norm;               // パラメータ
+    double alpha;                 // 採択率に比例する感じのやつ
+    // 最終的な α は パラメータ1の事前確率 x パラメータ2の事前確率 x ... x 尤度
+    // 尤度 = f(Ramp(d1-s1) + Ramp(d2-s2) + ... + Ramp(dk-sk) - 実際にかかった時間) のすべての完了タスクに対する総積
+    // ただし f は正規分布 N(0, 6^2 / 12) の確率密度関数 (本当は一様分布)
+    // skill_base を変えたとき、l2_norm も合わせて変えると差分更新が効率的にできる
+
+    inline void Update() {
+        using common::rng;
+        auto skill = rng.randint(input::K);
+    }
+};
+auto state = array<State, input::M>(); // [メンバー] := 現在のサンプル
+} // namespace mh
+
 void Initialize() {
     ASSERT(input::K != 0, "input がまだだよ");
     initial_expected_time = initial_expected_time_all[input::K - 10];
@@ -606,15 +628,26 @@ void Initialize() {
         rep(skill, input::K) { expected_skill[member][skill] = initial_expected_skill[input::K - 10]; }
         PrintExpectedSkill(member);
     }
+
+    // theta の初期化
+    // TODO
 }
+
 inline void Update(const int& member) {
     // タスク-メンバー の時間を予測
-    // TODO
+    const auto& task_queue = common::open_tasks; // TODO: 仮なので直す
+
+    // メトロポリス・ヘイスティング
+
+    constexpr auto MCMC_N_SAMPLING = 1000;
+    rep(iteration, MCMC_N_SAMPLING) {
+        //
+    }
+
     // for (const auto& task : task_queue) {
     //     expected_time[task][member] = hogehoge
     // }
 }
-
 } // namespace prediction
 
 // ========================== main loop ==========================
@@ -675,7 +708,7 @@ void GreedySolution() {
             auto task = member_status[member];
             member_status[member] = -1;
             task_status[task] = TaskStatus::Finished;
-            common::finished_tasks[member].push({task, day - starting_times[member]});
+            finished_tasks[member].push({task, day - starting_times[member]});
             // cerr << "task=" << task << endl;
             for (const auto& u : input::G[task]) {
                 // cerr << "u=" << u << endl;
@@ -685,6 +718,7 @@ void GreedySolution() {
                 }
             }
             open_members.push(member);
+            prediction::Update(member);
         }
 
         // 着手

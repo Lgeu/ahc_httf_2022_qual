@@ -1,0 +1,9 @@
+tools
+*.zip
+*.out
+.vs
+x64
+.ipynb_checkpoints
+*.txt
+!answer/out.txt
+!compile_flags.txt

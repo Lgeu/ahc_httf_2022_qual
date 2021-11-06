@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bitset>
+#include <cassert>
 #include <chrono>
 #include <climits>
 #include <cstdio>
@@ -190,6 +191,307 @@ template <typename T> ostream& operator<<(ostream& os, const Vec2<T>& vec) {
     os << vec.y << ' ' << vec.x;
     return os;
 }
+
+// ========================== 借り物 ==========================
+// clang-format off
+    // 正規分布ライブラリ
+    // https://github.com/miloyip/normaldist-benchmark
+    /*
+    The MIT License (MIT)
+
+    Copyright (c) 2015 Milo Yip
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+    */
+    // https://github.com/miloyip/normaldist-benchmark/blob/master/src/avx_mathfun.h
+    /*
+    AVX implementation of sin, cos, sincos, exp and log
+    Based on "sse_mathfun.h", by Julien Pommier
+    http://gruntthepeon.free.fr/ssemath/
+    Copyright (C) 2012 Giovanni Garberoglio
+    Interdisciplinary Laboratory for Computational Science (LISC)
+    Fondazione Bruno Kessler and University of Trento
+    via Sommarive, 18
+    I-38123 Trento (Italy)
+    This software is provided 'as-is', without any express or implied
+    warranty.  In no event will the authors be held liable for any damages
+    arising from the use of this software.
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+    1. The origin of this software must not be misrepresented; you must not
+        claim that you wrote the original software. If you use this software
+        in a product, an acknowledgment in the product documentation would be
+        appreciated but is not required.
+    2. Altered source versions must be plainly marked as such, and must not be
+        misrepresented as being the original software.
+    3. This notice may not be removed or altered from any source distribution.
+    (this is the zlib license)
+    */
+
+    #define _PS256_CONST(Name, Val) alignas(32) static const float _ps256_##Name[8] = {Val, Val, Val, Val, Val, Val, Val, Val}
+    #define _PI32_CONST256(Name, Val) alignas(32) static const int _pi32_256_##Name[8] = {Val, Val, Val, Val, Val, Val, Val, Val}
+    #define _PS256_CONST_TYPE(Name, Type, Val) alignas(32) static const Type _ps256_##Name[8] = {Val, Val, Val, Val, Val, Val, Val, Val}
+
+    _PS256_CONST(1, 1.0f);
+    _PS256_CONST(0p5, 0.5f);
+    _PS256_CONST(minus_cephes_DP1, -0.78515625f);
+    _PS256_CONST(minus_cephes_DP2, -2.4187564849853515625e-4f);
+    _PS256_CONST(minus_cephes_DP3, -3.77489497744594108e-8f);
+    _PS256_CONST(sincof_p0, -1.9515295891E-4f);
+    _PS256_CONST(sincof_p1, 8.3321608736E-3f);
+    _PS256_CONST(sincof_p2, -1.6666654611E-1f);
+    _PS256_CONST(coscof_p0, 2.443315711809948E-005f);
+    _PS256_CONST(coscof_p1, -1.388731625493765E-003f);
+    _PS256_CONST(coscof_p2, 4.166664568298827E-002f);
+    _PS256_CONST(cephes_FOPI, 1.27323954473516f); // 4 / M_PI
+    _PS256_CONST(cephes_SQRTHF, 0.707106781186547524f);
+    _PS256_CONST(cephes_log_p0, 7.0376836292E-2f);
+    _PS256_CONST(cephes_log_p1, -1.1514610310E-1f);
+    _PS256_CONST(cephes_log_p2, 1.1676998740E-1f);
+    _PS256_CONST(cephes_log_p3, -1.2420140846E-1f);
+    _PS256_CONST(cephes_log_p4, +1.4249322787E-1f);
+    _PS256_CONST(cephes_log_p5, -1.6668057665E-1f);
+    _PS256_CONST(cephes_log_p6, +2.0000714765E-1f);
+    _PS256_CONST(cephes_log_p7, -2.4999993993E-1f);
+    _PS256_CONST(cephes_log_p8, +3.3333331174E-1f);
+    _PS256_CONST(cephes_log_q1, -2.12194440e-4f);
+    _PS256_CONST(cephes_log_q2, 0.693359375f);
+    _PI32_CONST256(0, 0);
+    _PI32_CONST256(1, 1);
+    _PI32_CONST256(inv1, ~1);
+    _PI32_CONST256(2, 2);
+    _PI32_CONST256(4, 4);
+    _PI32_CONST256(0x7f, 0x7f);
+    /* the smallest non denormalized float number */
+    _PS256_CONST_TYPE(min_norm_pos, int, 0x00800000);
+    _PS256_CONST_TYPE(mant_mask, int, 0x7f800000);
+    _PS256_CONST_TYPE(inv_mant_mask, int, ~0x7f800000);
+    _PS256_CONST_TYPE(sign_mask, unsigned, 0x80000000u);
+    _PS256_CONST_TYPE(inv_sign_mask, unsigned, ~0x80000000u);
+
+    inline void sincos256_ps(__m256 x, __m256* s, __m256* c) {
+
+        __m256 xmm1, xmm2, xmm3 = _mm256_setzero_ps(), sign_bit_sin, y;
+        __m256i imm0, imm2, imm4;
+
+        sign_bit_sin = x;
+        /* take the absolute value */
+        x = _mm256_and_ps(x, *(__m256*)_ps256_inv_sign_mask);
+        /* extract the sign bit (upper one) */
+        sign_bit_sin = _mm256_and_ps(sign_bit_sin, *(__m256*)_ps256_sign_mask);
+
+        /* scale by 4/Pi */
+        y = _mm256_mul_ps(x, *(__m256*)_ps256_cephes_FOPI);
+
+        /* store the integer part of y in imm2 */
+        imm2 = _mm256_cvttps_epi32(y);
+
+        /* j=(j+1) & (~1) (see the cephes sources) */
+        imm2 = _mm256_add_epi32(imm2, *(__m256i*)_pi32_256_1);
+        imm2 = _mm256_and_si256(imm2, *(__m256i*)_pi32_256_inv1);
+
+        y = _mm256_cvtepi32_ps(imm2);
+        imm4 = imm2;
+
+        /* get the swap sign flag for the sine */
+        imm0 = _mm256_and_si256(imm2, *(__m256i*)_pi32_256_4);
+        imm0 = _mm256_slli_epi32(imm0, 29);
+        // __m256 swap_sign_bit_sin = _mm256_castsi256_ps(imm0);
+
+        /* get the polynom selection mask for the sine*/
+        imm2 = _mm256_and_si256(imm2, *(__m256i*)_pi32_256_2);
+        imm2 = _mm256_cmpeq_epi32(imm2, *(__m256i*)_pi32_256_0);
+        // __m256 poly_mask = _mm256_castsi256_ps(imm2);
+
+        __m256 swap_sign_bit_sin = _mm256_castsi256_ps(imm0);
+        __m256 poly_mask = _mm256_castsi256_ps(imm2);
+
+        /* The magic pass: "Extended precision modular arithmetic"
+        x = ((x - y * DP1) - y * DP2) - y * DP3; */
+        xmm1 = *(__m256*)_ps256_minus_cephes_DP1;
+        xmm2 = *(__m256*)_ps256_minus_cephes_DP2;
+        xmm3 = *(__m256*)_ps256_minus_cephes_DP3;
+        xmm1 = _mm256_mul_ps(y, xmm1);
+        xmm2 = _mm256_mul_ps(y, xmm2);
+        xmm3 = _mm256_mul_ps(y, xmm3);
+        x = _mm256_add_ps(x, xmm1);
+        x = _mm256_add_ps(x, xmm2);
+        x = _mm256_add_ps(x, xmm3);
+
+        imm4 = _mm256_sub_epi32(imm4, *(__m256i*)_pi32_256_2);
+        imm4 = _mm256_andnot_si256(imm4, *(__m256i*)_pi32_256_4);
+        imm4 = _mm256_slli_epi32(imm4, 29);
+
+        __m256 sign_bit_cos = _mm256_castsi256_ps(imm4);
+
+        sign_bit_sin = _mm256_xor_ps(sign_bit_sin, swap_sign_bit_sin);
+
+        /* Evaluate the first polynom  (0 <= x <= Pi/4) */
+        __m256 z = _mm256_mul_ps(x, x);
+
+        y = _mm256_mul_ps(y, z);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_coscof_p1);
+        y = _mm256_mul_ps(y, z);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_coscof_p2);
+        y = _mm256_mul_ps(y, z);
+        y = _mm256_mul_ps(y, z);
+        __m256 tmp = _mm256_mul_ps(z, *(__m256*)_ps256_0p5);
+        y = _mm256_sub_ps(y, tmp);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_1);
+
+        /* Evaluate the second polynom  (Pi/4 <= x <= 0) */
+
+        __m256 y2 = *(__m256*)_ps256_sincof_p0;
+        y2 = _mm256_mul_ps(y2, z);
+        y2 = _mm256_add_ps(y2, *(__m256*)_ps256_sincof_p1);
+        y2 = _mm256_mul_ps(y2, z);
+        y2 = _mm256_add_ps(y2, *(__m256*)_ps256_sincof_p2);
+        y2 = _mm256_mul_ps(y2, z);
+        y2 = _mm256_mul_ps(y2, x);
+        y2 = _mm256_add_ps(y2, x);
+
+        /* select the correct result from the two polynoms */
+        xmm3 = poly_mask;
+        __m256 ysin2 = _mm256_and_ps(xmm3, y2);
+        __m256 ysin1 = _mm256_andnot_ps(xmm3, y);
+        y2 = _mm256_sub_ps(y2, ysin2);
+        y = _mm256_sub_ps(y, ysin1);
+
+        xmm1 = _mm256_add_ps(ysin1, ysin2);
+        xmm2 = _mm256_add_ps(y, y2);
+
+        /* update the sign */
+        *s = _mm256_xor_ps(xmm1, sign_bit_sin);
+        *c = _mm256_xor_ps(xmm2, sign_bit_cos);
+    }
+    inline __m256 log256_ps(__m256 x) {
+        __m256i imm0;
+        __m256 one = *(__m256*)_ps256_1;
+
+        // __m256 invalid_mask = _mm256_cmple_ps(x, _mm256_setzero_ps());
+        __m256 invalid_mask = _mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_LE_OS);
+
+        x = _mm256_max_ps(x, *(__m256*)_ps256_min_norm_pos); /* cut off denormalized stuff */
+
+        // can be done with AVX2
+        imm0 = _mm256_srli_epi32(_mm256_castps_si256(x), 23);
+
+        /* keep only the fractional part */
+        x = _mm256_and_ps(x, *(__m256*)_ps256_inv_mant_mask);
+        x = _mm256_or_ps(x, *(__m256*)_ps256_0p5);
+
+        // this is again another AVX2 instruction
+        imm0 = _mm256_sub_epi32(imm0, *(__m256i*)_pi32_256_0x7f);
+        __m256 e = _mm256_cvtepi32_ps(imm0);
+
+        e = _mm256_add_ps(e, one);
+
+        /* part2:
+        if( x < SQRTHF ) {
+            e -= 1;
+            x = x + x - 1.0;
+        } else { x = x - 1.0; }
+        */
+        // __m256 mask = _mm256_cmplt_ps(x, *(__m256*)_ps256_cephes_SQRTHF);
+        __m256 mask = _mm256_cmp_ps(x, *(__m256*)_ps256_cephes_SQRTHF, _CMP_LT_OS);
+        __m256 tmp = _mm256_and_ps(x, mask);
+        x = _mm256_sub_ps(x, one);
+        e = _mm256_sub_ps(e, _mm256_and_ps(one, mask));
+        x = _mm256_add_ps(x, tmp);
+
+        __m256 z = _mm256_mul_ps(x, x);
+
+        __m256 y = *(__m256*)_ps256_cephes_log_p0;
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p1);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p2);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p3);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p4);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p5);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p6);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p7);
+        y = _mm256_mul_ps(y, x);
+        y = _mm256_add_ps(y, *(__m256*)_ps256_cephes_log_p8);
+        y = _mm256_mul_ps(y, x);
+
+        y = _mm256_mul_ps(y, z);
+
+        tmp = _mm256_mul_ps(e, *(__m256*)_ps256_cephes_log_q1);
+        y = _mm256_add_ps(y, tmp);
+
+        tmp = _mm256_mul_ps(z, *(__m256*)_ps256_0p5);
+        y = _mm256_sub_ps(y, tmp);
+
+        tmp = _mm256_mul_ps(e, *(__m256*)_ps256_cephes_log_q2);
+        x = _mm256_add_ps(x, y);
+        x = _mm256_add_ps(x, tmp);
+        x = _mm256_or_ps(x, invalid_mask); // negative arg will be NAN
+        return x;
+    }
+
+    _PS256_CONST_TYPE(lcg_a, uint32_t, 1664525);
+    _PS256_CONST_TYPE(lcg_b, uint32_t, 1013904223);
+    _PS256_CONST_TYPE(lcg_mask, uint32_t, 0x3F800000);
+
+    class LCG {
+    public:
+        LCG() : x(_mm256_setr_epi32(1, 2, 3, 4, 5, 6, 7, 8)) {}
+
+        __m256 operator()() {
+            x = _mm256_add_epi32(_mm256_mullo_epi32(x, *(__m256i*)_ps256_lcg_a), *(__m256i*)_ps256_lcg_b);
+            __m256i u = _mm256_or_si256(_mm256_srli_epi32(x, 9), *(__m256i*)_ps256_lcg_mask);
+            __m256 f = _mm256_sub_ps(_mm256_castsi256_ps(u), *(__m256*)_ps256_1);
+            return f;
+        }
+
+    private:
+        __m256i x;
+    };
+
+    // https://github.com/miloyip/normaldist-benchmark/blob/master/src/boxmuller_avx.cpp
+    static void normaldistf_boxmuller_avx(float* data, size_t count) {
+        assert(count % 16 == 0);
+        const __m256 twopi = _mm256_set1_ps(2.0f * 3.14159265358979323846f);
+        const __m256 one = _mm256_set1_ps(1.0f);
+        const __m256 minustwo = _mm256_set1_ps(-2.0f);
+
+        LCG r;
+        for (size_t i = 0; i < count; i += 16) {
+            __m256 u1 = _mm256_sub_ps(one, r()); // [0, 1) -> (0, 1]
+            __m256 u2 = r();
+            __m256 radius = _mm256_sqrt_ps(_mm256_mul_ps(minustwo, log256_ps(u1)));
+            __m256 theta = _mm256_mul_ps(twopi, u2);
+            __m256 sintheta, costheta;
+            sincos256_ps(theta, &sintheta, &costheta);
+            _mm256_store_ps(&data[i], _mm256_mul_ps(radius, costheta));
+            _mm256_store_ps(&data[i + 8], _mm256_mul_ps(radius, sintheta));
+        }
+    }
+// clang-format on
+// ========================== ここまで借り物 ==========================
 
 // 乱数
 struct Random {
@@ -548,12 +850,12 @@ auto G = Graph<1000, 3000>();
 // ========================== common ==========================
 
 namespace common {
-struct FinishedTask {
+struct CompletedTask {
     int task; // タスク番号
     int t;    // かかった時間
 };
-auto finished_tasks = array<Stack<FinishedTask, 300>, input::M>();
-enum class TaskStatus { NotStarted, InProgress, Finished };
+auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
+enum class TaskStatus { NotStarted, InProgress, Completed };
 auto task_status = array<TaskStatus, input::N>();
 auto member_status = array<int, input::M>(); // -1: 空き
 auto starting_times = array<int, input::M>();
@@ -599,18 +901,82 @@ inline void PrintExpectedSkill(const int& member) {
 
 namespace mh {
 struct State {
-    array<double, 20> skill_base; // パラメータ
-    double sum_square_skill_base; // 2 乗和
-    double l2_norm;               // パラメータ
-    double alpha;                 // 採択率に比例する感じのやつ
+    // 実際のスキル数値 = l2_norm / root_sum_square_skills_base * skills_base
+    array<double, 20> skills_base; // パラメータ, 事前分布は正規分布
+    // array<double, 20> log_prior_probabilities; // 各パラメータの事前確率の対数 = -skills_base * skills_base / 2
+    double sum_log_prior_probabilities;  // 事前確率の対数
+    array<array<double, 20>, 200> ramps; // 各タスク各技能のランプ関数をとった値
+    array<double, 200> sum_ramps;        // 各タスクの期待完了時間
+    double log_likelihood;               // 対数尤度: sum(log(f(sum_ramps)))
+    double sum_square_skills_base;       // 2 乗和
+    double root_sum_square_skills_base;  // 2 乗和の平方根 (分母)
+    double l2_norm;                      // パラメータ, 事前分布は一様分布
+    double log_alpha;                    // 採択率に比例する感じのやつの対数
+    int member;                          // メンバー
     // 最終的な α は パラメータ1の事前確率 x パラメータ2の事前確率 x ... x 尤度
     // 尤度 = f(Ramp(d1-s1) + Ramp(d2-s2) + ... + Ramp(dk-sk) - 実際にかかった時間) のすべての完了タスクに対する総積
-    // ただし f は正規分布 N(0, 6^2 / 12) の確率密度関数 (本当は一様分布)
+    // ただし f は正規分布 N(0, 6^2 / 12) の確率密度関数 (に比例する値) (本当は一様分布)
     // skill_base を変えたとき、l2_norm も合わせて変えると差分更新が効率的にできる
+
+    // 採択率は α'/α = exp(log(α') - log(α))
+
+    inline void AddCompletedTask(const int& task) {
+        // TODO
+    }
 
     inline void Update() {
         using common::rng;
-        auto skill = rng.randint(input::K);
+        const auto skill = rng.randint(input::K + 1);
+        if (skill == input::K) {
+            // TODO: l2_norm だけ変更
+        } else {
+            // スケール一定
+            constexpr static auto MCMC_Q_RANGE = 0.5;
+            const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
+            const auto new_skill_base = skills_base[skill] + delta;
+            const auto delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
+            const auto new_sum_square_skills_base = sum_square_skills_base + delta_sum_square_skills_base;
+            const auto new_root_sum_square_skills_base = sqrt(new_sum_square_skills_base);
+            const auto scale = l2_norm / root_sum_square_skills_base;
+            const auto new_l2_norm = scale * new_root_sum_square_skills_base;
+            if (new_l2_norm < 20.0 || new_l2_norm > 60.0) {
+                // TODO: やり直し
+            }
+            const auto new_sum_log_prior_probabilities = sum_log_prior_probabilities + delta_sum_square_skills_base * -0.5;
+            const auto s = abs(skills_base[skill]) * scale;
+            static auto new_ramps = array<double, 200>();     // common::completed_tasks[member].size() まで使う
+            static auto new_sum_ramps = array<double, 200>(); // common::completed_tasks[member].size() まで使う
+            auto new_log_likelihood = 0.0;
+            auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
+            rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+                const auto task = common::completed_tasks[idx_completed_tasks].size();
+                const auto ramp = max(0.0, input::d[task][skill] - s);
+                new_ramps[idx_completed_tasks] = ramp;
+                new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[idx_completed_tasks][skill];
+                new_log_likelihood += new_sum_ramps.back() * new_sum_ramps.back();
+            }
+            new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
+            const auto new_log_alpha = new_sum_log_prior_probabilities + new_log_likelihood;
+            const auto p = exp(new_log_alpha - log_alpha); // 採択率
+            const auto r = rng.random();
+            if (p < r) {
+                // 採択
+                skills_base[skill] = new_skill_base;
+                sum_log_prior_probabilities = new_sum_log_prior_probabilities;
+                rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+                    ramps[idx_completed_tasks][skill] = new_ramps[idx_completed_tasks];
+                    sum_ramps[idx_completed_tasks] = new_sum_ramps[idx_completed_tasks];
+                }
+                log_likelihood = new_log_likelihood;
+                sum_square_skills_base = new_sum_square_skills_base;
+                root_sum_square_skills_base = new_root_sum_square_skills_base;
+                l2_norm = new_l2_norm;
+                log_alpha = new_log_alpha;
+            } else {
+                // 棄却
+                // 何もしない
+            }
+        }
     }
 };
 auto state = array<State, input::M>(); // [メンバー] := 現在のサンプル
@@ -707,8 +1073,8 @@ void GreedySolution() {
             // cerr << "member=" << member << endl;
             auto task = member_status[member];
             member_status[member] = -1;
-            task_status[task] = TaskStatus::Finished;
-            finished_tasks[member].push({task, day - starting_times[member]});
+            task_status[task] = TaskStatus::Completed;
+            completed_tasks[member].push({task, day - starting_times[member]});
             // cerr << "task=" << task << endl;
             for (const auto& u : input::G[task]) {
                 // cerr << "u=" << u << endl;

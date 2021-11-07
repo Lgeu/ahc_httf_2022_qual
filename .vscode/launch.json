@@ -9,7 +9,6 @@
             "request": "attach",
             "name": "Debug",
             "program": "${workspaceFolder}/answer/a.out",
-            //"pid": 498538,
             // "program": "${workspaceFolder}/tools/target/release/tester",
             // "args": [
             //     "./a.out",

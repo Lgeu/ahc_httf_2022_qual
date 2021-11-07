@@ -904,11 +904,11 @@ struct State {
     // 実際のスキル数値 = l2_norm / root_sum_square_skills_base * skills_base
     array<double, 20> skills_base; // パラメータ, 事前分布は正規分布
     // array<double, 20> log_prior_probabilities; // 各パラメータの事前確率の対数 = -skills_base * skills_base / 2
-    double sum_log_prior_probabilities;  // 事前確率の対数
+    // double sum_log_prior_probabilities;  // 事前確率の対数  -sum_square_skills_base / 2
     array<array<double, 20>, 200> ramps; // 各タスク各技能のランプ関数をとった値
     array<double, 200> sum_ramps;        // 各タスクの期待完了時間
-    double log_likelihood;               // 対数尤度: sum(log(f(sum_ramps)))
-    double sum_square_skills_base;       // 2 乗和
+    double log_likelihood;               // 対数尤度: sum(log(sum_ramps^2/6))
+    double sum_square_skills_base;       // 2 乗和  sum(skill_base^2)
     double root_sum_square_skills_base;  // 2 乗和の平方根 (分母)
     double l2_norm;                      // パラメータ, 事前分布は一様分布
     double log_alpha;                    // 採択率に比例する感じのやつの対数
@@ -920,49 +920,110 @@ struct State {
 
     // 採択率は α'/α = exp(log(α') - log(α))
 
-    inline void AddCompletedTask(const int& task) {
-        // TODO
+    inline State() = default;
+    inline State(const int& member_) {
+        rep(skill, input::K) {
+            skills_base[skill] = sqrt(2.0 / PI); // 0.7978845608
+        }
+        sum_square_skills_base = (double)(input::K * 2) / PI;
+        root_sum_square_skills_base = sqrt(sum_square_skills_base);
+        l2_norm = 40.0;
+        const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5;
+        log_alpha = sum_log_prior_probabilities;
+        member = member_;
+    }
+
+    inline void AddCompletedTask() {
+        // common::completed_tasks を更新した後に呼ぶ
+        const auto scale = l2_norm / root_sum_square_skills_base;
+        const auto idx_completed_tasks = common::completed_tasks[member].size() - 1;
+        const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
+        ASSERT(sum_ramps[idx_completed_tasks] == 0.0, "初期化されてないよ");
+        sum_ramps[idx_completed_tasks] = -completed_task.t;
+        rep(skill, input::K) {
+            const auto s = abs(skills_base[skill]) * scale;
+            ramps[idx_completed_tasks][skill] = max(0.0, input::d[completed_task.task][skill] - s);
+            sum_ramps[idx_completed_tasks] += ramps[idx_completed_tasks][skill];
+        }
+        log_likelihood += sum_ramps[idx_completed_tasks] * sum_ramps[idx_completed_tasks] * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0));
+        const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5;
+        log_alpha = sum_log_prior_probabilities + log_likelihood;
     }
 
     inline void Update() {
         using common::rng;
         const auto skill = rng.randint(input::K + 1);
         if (skill == input::K) {
-            // TODO: l2_norm だけ変更
+            // l2_norm だけ変更, 事前確率は変化しない
+            constexpr static auto MCMC_Q_L2_NORM_RANGE = 5.0;
+            const auto delta = (rng.random() - 0.5) * MCMC_Q_L2_NORM_RANGE;
+            const auto tmp = l2_norm + delta;
+            const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
+            const auto new_scale = new_l2_norm / root_sum_square_skills_base;
+            static auto new_ramps = array<array<double, 20>, 200>();
+            static auto new_sum_ramps = array<double, 200>();
+            auto new_log_likelihood = 0.0;
+            rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+                const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
+                new_sum_ramps[idx_completed_tasks] = -completed_task.t;
+                rep(skl, input::K) {
+                    const auto s = abs(skills_base[skl]) * new_scale;
+                    new_ramps[idx_completed_tasks][skl] = max(0.0, input::d[completed_task.task][skl] - s);
+                    new_sum_ramps[idx_completed_tasks] += new_ramps[idx_completed_tasks][skl];
+                }
+                new_log_likelihood += new_sum_ramps[idx_completed_tasks] * new_sum_ramps[idx_completed_tasks] * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0));
+            }
+            const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5; // これは変わらない
+            const auto new_log_alpha = sum_log_prior_probabilities + new_log_likelihood;
+            const auto p = exp(new_log_alpha - log_alpha); // 採択率
+            const auto r = rng.random();
+            if (p < r) {
+                // 採択
+                rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+                    rep(skl, input::K) { ramps[idx_completed_tasks][skl] = new_ramps[idx_completed_tasks][skl]; }
+                    sum_ramps[idx_completed_tasks] = new_sum_ramps[idx_completed_tasks];
+                }
+                log_likelihood = new_log_likelihood;
+                l2_norm = new_l2_norm;
+                log_alpha = new_log_alpha;
+            } else {
+                // 棄却
+                // 何もしない
+            }
         } else {
             // スケール一定
-            constexpr static auto MCMC_Q_RANGE = 0.5;
-            const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
-            const auto new_skill_base = skills_base[skill] + delta;
-            const auto delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
-            const auto new_sum_square_skills_base = sum_square_skills_base + delta_sum_square_skills_base;
-            const auto new_root_sum_square_skills_base = sqrt(new_sum_square_skills_base);
+            // 計算量は O(メンバーがこなしたタスク数)
             const auto scale = l2_norm / root_sum_square_skills_base;
-            const auto new_l2_norm = scale * new_root_sum_square_skills_base;
-            if (new_l2_norm < 20.0 || new_l2_norm > 60.0) {
-                // TODO: やり直し
-            }
-            const auto new_sum_log_prior_probabilities = sum_log_prior_probabilities + delta_sum_square_skills_base * -0.5;
+            double new_skill_base, delta_sum_square_skills_base, new_sum_square_skills_base, new_root_sum_square_skills_base, new_l2_norm;
+            do {
+                constexpr static auto MCMC_Q_RANGE = 0.5;
+                const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
+                new_skill_base = skills_base[skill] + delta;
+                delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
+                new_sum_square_skills_base = sum_square_skills_base + delta_sum_square_skills_base;
+                new_root_sum_square_skills_base = sqrt(new_sum_square_skills_base);
+                new_l2_norm = scale * new_root_sum_square_skills_base;
+            } while (new_l2_norm < 20.0 || new_l2_norm > 60.0);
             const auto s = abs(skills_base[skill]) * scale;
             static auto new_ramps = array<double, 200>();     // common::completed_tasks[member].size() まで使う
             static auto new_sum_ramps = array<double, 200>(); // common::completed_tasks[member].size() まで使う
             auto new_log_likelihood = 0.0;
-            auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
+            // auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
             rep(idx_completed_tasks, common::completed_tasks[member].size()) {
-                const auto task = common::completed_tasks[idx_completed_tasks].size();
+                const auto task = common::completed_tasks[member][idx_completed_tasks].task;
                 const auto ramp = max(0.0, input::d[task][skill] - s);
                 new_ramps[idx_completed_tasks] = ramp;
                 new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[idx_completed_tasks][skill];
                 new_log_likelihood += new_sum_ramps.back() * new_sum_ramps.back();
             }
             new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
+            const auto new_sum_log_prior_probabilities = new_sum_square_skills_base * -0.5;
             const auto new_log_alpha = new_sum_log_prior_probabilities + new_log_likelihood;
             const auto p = exp(new_log_alpha - log_alpha); // 採択率
             const auto r = rng.random();
             if (p < r) {
                 // 採択
                 skills_base[skill] = new_skill_base;
-                sum_log_prior_probabilities = new_sum_log_prior_probabilities;
                 rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                     ramps[idx_completed_tasks][skill] = new_ramps[idx_completed_tasks];
                     sum_ramps[idx_completed_tasks] = new_sum_ramps[idx_completed_tasks];
@@ -992,11 +1053,9 @@ void Initialize() {
     }
     rep(member, input::M) {
         rep(skill, input::K) { expected_skill[member][skill] = initial_expected_skill[input::K - 10]; }
+        new (&mh::state[member]) remove_reference<decltype(mh::state[member])>::type(member);
         PrintExpectedSkill(member);
     }
-
-    // theta の初期化
-    // TODO
 }
 
 inline void Update(const int& member) {
@@ -1075,6 +1134,7 @@ void GreedySolution() {
             member_status[member] = -1;
             task_status[task] = TaskStatus::Completed;
             completed_tasks[member].push({task, day - starting_times[member]});
+            prediction::mh::state[member].AddCompletedTask();
             // cerr << "task=" << task << endl;
             for (const auto& u : input::G[task]) {
                 // cerr << "u=" << u << endl;

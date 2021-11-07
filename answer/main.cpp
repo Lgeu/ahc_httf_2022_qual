@@ -25,6 +25,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -83,7 +84,7 @@
 
 #define CHECK(var)                                                                                                                                   \
     do {                                                                                                                                             \
-        std::cout << #var << '=' << var << endl;                                                                                                     \
+        cerr << #var << '=' << var << endl;                                                                                                          \
     } while (false)
 
 // ========================== utils ==========================
@@ -862,7 +863,7 @@ auto starting_times = array<int, input::M>();
 auto in_dims = array<int, input::N>(); // 入次数
 auto open_tasks = Stack<int, input::N>();
 auto open_members = Stack<int, input::N>();
-auto rng = Random(42);
+auto rng = Random(3141592);
 
 } // namespace common
 
@@ -907,14 +908,14 @@ struct State {
     // double sum_log_prior_probabilities;  // 事前確率の対数  -sum_square_skills_base / 2
     array<array<double, 20>, 200> ramps; // 各タスク各技能のランプ関数をとった値
     array<double, 200> sum_ramps;        // 各タスクの期待完了時間
-    double log_likelihood;               // 対数尤度: sum(log(sum_ramps^2/6))
+    double log_likelihood;               // 対数尤度: sum(sum_ramps^2/6)
     double sum_square_skills_base;       // 2 乗和  sum(skill_base^2)
     double root_sum_square_skills_base;  // 2 乗和の平方根 (分母)
     double l2_norm;                      // パラメータ, 事前分布は一様分布
     double log_alpha;                    // 採択率に比例する感じのやつの対数
     int member;                          // メンバー
     // 最終的な α は パラメータ1の事前確率 x パラメータ2の事前確率 x ... x 尤度
-    // 尤度 = f(Ramp(d1-s1) + Ramp(d2-s2) + ... + Ramp(dk-sk) - 実際にかかった時間) のすべての完了タスクに対する総積
+    // 尤度 = f(max(0, Ramp(d1-s1) + Ramp(d2-s2) + ... + Ramp(dk-sk)) - 実際にかかった時間) のすべての完了タスクに対する総積
     // ただし f は正規分布 N(0, 6^2 / 12) の確率密度関数 (に比例する値) (本当は一様分布)
     // skill_base を変えたとき、l2_norm も合わせて変えると差分更新が効率的にできる
 
@@ -954,8 +955,8 @@ struct State {
         using common::rng;
         const auto skill = rng.randint(input::K + 1);
         if (skill == input::K) {
-            // l2_norm だけ変更, 事前確率は変化しない
-            constexpr static auto MCMC_Q_L2_NORM_RANGE = 5.0;
+            // 1. l2_norm だけ変更, 事前確率は変化しない
+            constexpr static auto MCMC_Q_L2_NORM_RANGE = 2.0;
             const auto delta = (rng.random() - 0.5) * MCMC_Q_L2_NORM_RANGE;
             const auto tmp = l2_norm + delta;
             const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
@@ -971,13 +972,19 @@ struct State {
                     new_ramps[idx_completed_tasks][skl] = max(0.0, input::d[completed_task.task][skl] - s);
                     new_sum_ramps[idx_completed_tasks] += new_ramps[idx_completed_tasks][skl];
                 }
-                new_log_likelihood += new_sum_ramps[idx_completed_tasks] * new_sum_ramps[idx_completed_tasks] * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0));
+                new_log_likelihood += new_sum_ramps[idx_completed_tasks] * new_sum_ramps[idx_completed_tasks];
             }
+            new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
             const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5; // これは変わらない
             const auto new_log_alpha = sum_log_prior_probabilities + new_log_likelihood;
             const auto p = exp(new_log_alpha - log_alpha); // 採択率
             const auto r = rng.random();
-            if (p < r) {
+            cerr << "1. 事前確率一定 " << p << " " << log_alpha << " " << new_log_alpha << endl;
+            // CHECK(new_scale);
+            // CHECK(sum_log_prior_probabilities);
+            // CHECK(new_log_likelihood);
+            // CHECK(new_sum_ramps[0]);
+            if (r < p) {
                 // 採択
                 rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                     rep(skl, input::K) { ramps[idx_completed_tasks][skl] = new_ramps[idx_completed_tasks][skl]; }
@@ -991,12 +998,12 @@ struct State {
                 // 何もしない
             }
         } else {
-            // スケール一定
+            // 2. スケール一定
             // 計算量は O(メンバーがこなしたタスク数)
             const auto scale = l2_norm / root_sum_square_skills_base;
             double new_skill_base, delta_sum_square_skills_base, new_sum_square_skills_base, new_root_sum_square_skills_base, new_l2_norm;
             do {
-                constexpr static auto MCMC_Q_RANGE = 0.5;
+                constexpr static auto MCMC_Q_RANGE = 1.0;
                 const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
                 new_skill_base = skills_base[skill] + delta;
                 delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
@@ -1004,7 +1011,7 @@ struct State {
                 new_root_sum_square_skills_base = sqrt(new_sum_square_skills_base);
                 new_l2_norm = scale * new_root_sum_square_skills_base;
             } while (new_l2_norm < 20.0 || new_l2_norm > 60.0);
-            const auto s = abs(skills_base[skill]) * scale;
+            const auto s = abs(new_skill_base) * scale;
             static auto new_ramps = array<double, 200>();     // common::completed_tasks[member].size() まで使う
             static auto new_sum_ramps = array<double, 200>(); // common::completed_tasks[member].size() まで使う
             auto new_log_likelihood = 0.0;
@@ -1014,14 +1021,18 @@ struct State {
                 const auto ramp = max(0.0, input::d[task][skill] - s);
                 new_ramps[idx_completed_tasks] = ramp;
                 new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[idx_completed_tasks][skill];
-                new_log_likelihood += new_sum_ramps.back() * new_sum_ramps.back();
+                new_log_likelihood += new_sum_ramps[idx_completed_tasks] * new_sum_ramps[idx_completed_tasks];
             }
             new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
             const auto new_sum_log_prior_probabilities = new_sum_square_skills_base * -0.5;
             const auto new_log_alpha = new_sum_log_prior_probabilities + new_log_likelihood;
             const auto p = exp(new_log_alpha - log_alpha); // 採択率
+            cerr << "2. スケール一定 " << p << " " << log_alpha << " " << new_log_alpha << endl;
+            // CHECK(scale);
+            // CHECK(new_sum_log_prior_probabilities);
+            // CHECK(new_log_likelihood);
             const auto r = rng.random();
-            if (p < r) {
+            if (r < p) {
                 // 採択
                 skills_base[skill] = new_skill_base;
                 rep(idx_completed_tasks, common::completed_tasks[member].size()) {
@@ -1033,6 +1044,10 @@ struct State {
                 root_sum_square_skills_base = new_root_sum_square_skills_base;
                 l2_norm = new_l2_norm;
                 log_alpha = new_log_alpha;
+                // auto tmp_sum = 0.0;
+                // rep(skill, input::K) { tmp_sum += ramps[0][skill]; }
+                // CHECK(sum_ramps[0]);
+                // CHECK(tmp_sum);
             } else {
                 // 棄却
                 // 何もしない
@@ -1063,12 +1078,19 @@ inline void Update(const int& member) {
     const auto& task_queue = common::open_tasks; // TODO: 仮なので直す
 
     // メトロポリス・ヘイスティング
-
-    constexpr auto MCMC_N_SAMPLING = 1000;
+    auto& state = mh::state[member];
+    constexpr auto MCMC_N_SAMPLING = 10000;
     rep(iteration, MCMC_N_SAMPLING) {
-        //
+        state.Update();
+        rep(skill, input::K) {
+            constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 0.0001;
+            expected_skill[member][skill] *= 1.0 - EXPECTED_SKILL_EMA_ALPHA;
+            expected_skill[member][skill] +=
+                EXPECTED_SKILL_EMA_ALPHA * (abs(state.skills_base[skill]) * (state.l2_norm / state.root_sum_square_skills_base));
+        }
     }
 
+    // TODO
     // for (const auto& task : task_queue) {
     //     expected_time[task][member] = hogehoge
     // }
@@ -1145,6 +1167,7 @@ void GreedySolution() {
             }
             open_members.push(member);
             prediction::Update(member);
+            prediction::PrintExpectedSkill(member);
         }
 
         // 着手
@@ -1195,6 +1218,7 @@ void Solve() {
 }
 
 int main() {
+    // std::this_thread::sleep_for(std::chrono::seconds(10));
     Solve();
     // TODO
 }

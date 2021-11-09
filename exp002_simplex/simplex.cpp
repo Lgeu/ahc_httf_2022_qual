@@ -26,11 +26,6 @@ static const double epsilon2 = 0.00000001;
 static int m; // 不等式の数
 static int n; // 変数の数
 
-struct variable {
-    int label;
-    double value;
-};
-
 // イータ行列
 struct Eta {
     int col;
@@ -126,9 +121,7 @@ template <size_t siz, size_t siz2> void printFinalVariables(array<double, siz>& 
     printf("\n");
 }
 
-void printFamilyOfSolutions(variable b[], int nonbasic[], vector<double> d, double largestCoeff, int enteringLabel, double z) {}
-
-bool mComparator(variable v1, variable v2) { return v1.value > v2.value; }
+// void printFamilyOfSolutions(variable b[], int nonbasic[], vector<double> d, double largestCoeff, int enteringLabel, double z) {}
 
 constexpr auto MAX_N = 5000;
 constexpr auto MAX_M = 240;
@@ -219,7 +212,12 @@ int Solve(LPProblem& lp) {
         // 被約費用 \bar{c_N} = c_N - ya (ただし a は An の列) を求めて、
         // 値が正となる第 s 成分を選ぶ
 
-        static array<variable, MAX_N> cnbars; // \bar{c_N} の成分のうち、値が正であるもの
+        struct Variable {
+            int label, position;
+            double value;
+        };
+
+        static array<Variable, MAX_N> cnbars; // \bar{c_N} の成分のうち、値が正であるもの
         auto cnbars_size = 0;
 
         int entering_label = nonbasic[0];
@@ -240,17 +238,16 @@ int Solve(LPProblem& lp) {
             // DebugSimplex("x%d %5.3f ", var_label + 1, cnbar);
 
             if (cnbar > epsilon1) {
-                cnbars[cnbars_size] = {var_label, cnbar};
+                cnbars[cnbars_size] = {var_label, i, cnbar};
                 cnbars_size++;
                 if (cnbar > largest_coef) {
-                    largest_coef = cnbar;
-                    entering_label = var_label;
+                    largest_coef = cnbar; // 出力用
                 }
             }
         }
 
         // 目的関数の係数の降順にソート
-        sort(cnbars.begin(), cnbars.begin() + cnbars_size, mComparator);
+        sort(cnbars.begin(), cnbars.begin() + cnbars_size, [](const Variable& a, const Variable& b) { return a.value > b.value; });
 
         // DebugSimplex("\n");
 
@@ -259,8 +256,6 @@ int Solve(LPProblem& lp) {
             printf("\nNo entering var. Optimal value of %5.3f has been reached.\n", z);
             printFinalVariables(lp.b, b_labels, nonbasic);
             return 0;
-        } else {
-            DebugSimplex("Entering variable is x%d \n", entering_label + 1);
         }
 
         int entering_variable_index = 0;
@@ -268,24 +263,21 @@ int Solve(LPProblem& lp) {
         // Bd = a を解いて d を求める
         // d = B^{-1} a
         //   = ... E_2^{-1} E_1^{-1} a
-        vector<double> d(m);
+        static array<double, MAX_M> d;
         int leaving_label;
         int leaving_row;
         double smallest_t;
         while (true) {
             leaving_label = -1;
             leaving_row = -1;
-            smallest_t = -1;
+            smallest_t = 1e100;
             // if (entering_variable_index > 0) {
             //     DebugSimplex("\n\nRechoosing entering variable since the diagonal element in the eta column is close to zero.\n");
             // }
 
             if (entering_variable_index < cnbars_size) {
                 entering_label = cnbars[entering_variable_index].label;
-                // // 選び直したときの表示
-                // if (entering_variable_index > 0) {
-                //     DebugSimplex("Entering variable is x%d \n", entering_label + 1);
-                // }
+                // DebugSimplex("Entering variable is x%d \n", entering_label + 1);
             } else {
                 printf("\nNo entering var. Optimal value of %5.3f has been reached.\n", z);
                 printFinalVariables(lp.b, b_labels, nonbasic);
@@ -297,64 +289,40 @@ int Solve(LPProblem& lp) {
                 d[row] = lp.A[row][entering_label];
             }
 
-            // イータ行列を順に掛ける
+            // イータ行列の逆行列を順に掛けて d を求める
             for (auto it = pivots.cbegin(); it != pivots.cend(); ++it) {
                 const Eta& pivot = *it;
                 const int& row_to_change = pivot.col;
                 const double& d_original = d[row_to_change];
                 const auto d_row_to_change_tmp = d_original / pivot.values[row_to_change];
-                for (int row = 0; row < (int)d.size(); ++row) {
+                for (int row = 0; row < m; ++row) {
                     d[row] -= pivot.values[row] * d_row_to_change_tmp;
                 }
                 d[row_to_change] = d_row_to_change_tmp;
             }
 
-            // print out d (abarj)
-            DebugSimplex("d = ");
+            // // print out d (abarj)
+            // DebugSimplex("d = ");
+            // for (int i = 0; i < m; i++) {
+            //     DebugSimplex("%5.3f ", d[i]);
+            // }
+            // DebugSimplex("\n");
 
-            for (auto iter = d.cbegin(); iter != d.cend(); ++iter) {
-                DebugSimplex("%5.3f ", *iter);
-            }
+            // b = x_B - td >= 0 を満たす最大のスカラー t を求める。
+            // d のうち、正である成分について x_B[i] / d[i] を求め、
+            // もっとも小さくなるものが t であり、そのときの i が基底からから取り除く列になる。
+            // d の成分がすべて 0 以下であれば、問題は非有界。
 
-            DebugSimplex("\n");
-
-            // compute t for each b[i].value / d[i]
-            // where d[i] > 0
-            // choose the corresponding i for the smallest ratio
-            // as the leaving variable
-
-            // initialize smallest_t to be the first ratio where
-            // the coefficient of the entering variable in that row is negative
-            for (int row = 0; row < (int)d.size(); ++row) {
-                if (d[row] > 1e-5) {
-                    leaving_label = b_labels[row];
-                    leaving_row = row;
-                    smallest_t = lp.b[row] / d[row];
-                }
-            }
-
-            // if no ratio is computed, then the LP is unbounded
-            if (leaving_label == -1) {
-                DebugSimplex("\nThe given LP is unbounded. The family of solutions is:\n");
-                // printFamilyOfSolutions(b, nonbasic, d, largestCoeff, enteringLabel, z);
-                return 0;
-            }
-
-            // there is at least one ratio computed, print out the ratio(s)
-            // and choose the row corresponding to the smallest ratio to leave
-            DebugSimplex("ratio: ");
-
-            for (int row = 0; row < (int)d.size(); ++row) {
-                if (d[row] <= 1e-5) {
+            // 最小の比に対応する行を選ぶ
+            // DebugSimplex("ratio: ");
+            for (int row = 0; row < m; ++row) {
+                if (d[row] <= 0.0) {
                     continue;
                 }
-
                 double t_row = lp.b[row] / d[row];
-
-                if (t_row >= 0.0) {
-                    DebugSimplex("x%d %5.3f ", b_labels[row] + 1, t_row);
-                }
-
+                // if (t_row >= 0.0) {
+                //     DebugSimplex("x%d %5.3f ", b_labels[row] + 1, t_row);
+                // }
                 if (t_row < smallest_t) {
                     leaving_label = b_labels[row];
                     leaving_row = row;
@@ -362,8 +330,14 @@ int Solve(LPProblem& lp) {
                 }
             }
 
-            // check the diagonal element in the eta column
-            // to see if the current choice of entering variable has to be rejected
+            // 比率が計算されなければ非有界なので終了する
+            if (leaving_label == -1) {
+                DebugSimplex("\nThe given LP is unbounded. The family of solutions is:\n");
+                // printFamilyOfSolutions(b, nonbasic, d, largestCoeff, enteringLabel, z);
+                return 0;
+            }
+
+            // d が小さすぎる値なら、次の entering 変数を見る
             if (d[leaving_row] > epsilon2) {
                 DebugSimplex("\nLeaving variable is x%d\n", leaving_label + 1);
                 break;
@@ -373,14 +347,13 @@ int Solve(LPProblem& lp) {
             }
         }
 
-        // At this point we have a pair of entering and leaving variables
-        // so that the entering variable is positive and the diagonal entry in the eta column
-        // of the eta matrix is fairly far from zero
+        // この時点で、基底に追加する変数と取り除く変数のペアが決定している
 
-        // set the value of the entering varaible at t
-        // modify b (change leaving variable to entering variable, change values of other basic vars)
+        // 追加する変数の値を 1 にして、b を更新する
+        // (追加する変数と取り除く変数を入れ替え、それ以外の基底変数の値を更新する)
+        const Variable& entering_variable = cnbars[entering_variable_index];
         lp.b[leaving_row] = smallest_t;
-        b_labels[leaving_row] = entering_label;
+        b_labels[leaving_row] = entering_variable.label;
 
         const auto tmp = lp.b[leaving_row];
         for (int row = 0; row < lp.m; ++row) {
@@ -388,25 +361,28 @@ int Solve(LPProblem& lp) {
         }
         lp.b[leaving_row] = tmp;
 
-        // push a new eta matrix onto the vector
-        pivots.push_back({leaving_row, d});
+        // 新しいイータ行列を格納
+        pivots.push_back({leaving_row, vector<double>()});
+        pivots.back().values.resize(lp.m);
+        for (int i = 0; i < lp.m; i++) {
+            pivots.back().values[i] = d[i];
+        }
 
         // print out the eta matrix representing the pivot at this iteration
-        DebugSimplex("E%d = column %d: ", counter, leaving_row);
+        // DebugSimplex("E%d = column %d: ", counter, leaving_row);
+        // for (int i = 0; i < lp.m; i++) {
+        //     DebugSimplex("%5.3f ", d[i]);
+        // }
+        // DebugSimplex("\n");
 
-        for (auto iter = d.cbegin(); iter != d.cend(); ++iter) {
-            DebugSimplex("%5.3f ", *iter);
-        }
-
-        DebugSimplex("\n");
-
-        // ここがおかしい
-        for (int i = 0; i < n; i++) {
-            if (nonbasic[i] == entering_label) {
-                nonbasic[i] = leaving_label;
-                break;
-            }
-        }
+        // もとのコードはここがおかしい
+        nonbasic[entering_variable.position] = leaving_label;
+        // for (int i = 0; i < n; i++) {
+        //     if (nonbasic[i] == entering_label) {
+        //         nonbasic[i] = leaving_label;
+        //         break;
+        //     }
+        // }
         // nonbasic[entering_label] = leavingLabel;
 
         // // print out nonbasic and basic variable set after the pivot
@@ -420,7 +396,7 @@ int Solve(LPProblem& lp) {
         // smallest_t);
 
         // increase the value of the objective function
-        double increasedValue = largest_coef * smallest_t;
+        double increasedValue = entering_variable.value * smallest_t;
 
         // print out the update to the objective function value
         DebugSimplex("Increased value: %5.3f\n", increasedValue);
@@ -435,8 +411,9 @@ int Solve(LPProblem& lp) {
     }
 
     return 0;
-}
 } // namespace simplex
+} // namespace simplex
+
 int main(int argc, const char* argv[]) {
     using namespace std;
     static simplex::LPProblem lp;

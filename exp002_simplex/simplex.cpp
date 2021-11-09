@@ -16,7 +16,6 @@
 #include <numeric>
 #include <ostream>
 #include <vector>
-#include <x86intrin.h>
 
 namespace simplex {
 using namespace std;
@@ -142,15 +141,17 @@ struct LPProblem {
     }
 };
 
-void Solve(LPProblem& lp) {
+void Solve(LPProblem& lp, const int& max_iteration = 2000) {
     m = lp.m;
     n = lp.n;
 
     // スラック変数を含めた目的関数の係数にする
     fill(lp.c.begin() + lp.n, lp.c.begin() + (lp.n + lp.m), 0.0);
 
-    // b のラベル
+    // b と b のラベル
+    static array<double, MAX_M> b;
     static array<int, MAX_M> b_labels;
+    copy(lp.b.begin(), lp.b.begin() + lp.m, b.begin());
     iota(b_labels.begin(), b_labels.begin() + lp.m, lp.n);
 
     // 非基底変数のラベル、長さ n, 範囲 [0, n + m)
@@ -163,15 +164,15 @@ void Solve(LPProblem& lp) {
         lp.A[row][lp.n + row] = 1.0;
     }
 
-    // printLPInfo(lp.c, lp.b, lp.A);
+    // printLPInfo(lp.c, b, lp.A);
     // DebugSimplex("\n\n");
-    // printVariables(nonbasic, lp.b, b_labels);
-    // printBbar(lp.b);
+    // printVariables(nonbasic, b, b_labels);
+    // printBbar(b);
     // DebugSimplex("\n");
 
     // b が 0 以上であることを確認
     for (int row = 0; row < lp.m; ++row) {
-        if (lp.b[row] < 0.0) {
+        if (b[row] < 0.0) {
             lp.status = LPProblem::Status::INFEASIBLE;
             return;
         }
@@ -323,7 +324,7 @@ void Solve(LPProblem& lp) {
                 if (d[row] <= 0.0) {
                     continue;
                 }
-                double t_row = lp.b[row] / d[row];
+                double t_row = b[row] / d[row];
                 // if (t_row >= 0.0) {
                 //     DebugSimplex("x%d %5.3f ", b_labels[row] + 1, t_row);
                 // }
@@ -357,14 +358,14 @@ void Solve(LPProblem& lp) {
         // 追加する変数の値を 1 にして、b を更新する
         // (追加する変数と取り除く変数を入れ替え、それ以外の基底変数の値を更新する)
         const Variable& entering_variable = cnbars[entering_variable_index];
-        lp.b[leaving_row] = smallest_t;
+        b[leaving_row] = smallest_t;
         b_labels[leaving_row] = entering_variable.label;
 
-        const auto tmp = lp.b[leaving_row];
+        const auto tmp = b[leaving_row];
         for (int row = 0; row < lp.m; ++row) {
-            lp.b[row] -= d[row] * smallest_t;
+            b[row] -= d[row] * smallest_t;
         }
-        lp.b[leaving_row] = tmp;
+        b[leaving_row] = tmp;
 
         // 新しいイータ行列を格納
         pivots[pivots_size].col = leaving_row;
@@ -404,13 +405,16 @@ void Solve(LPProblem& lp) {
         z += increasedValue;
         DebugSimplex("Value of the objective function changed from %5.3f to %5.3f\n\n\n", originalZ, z);
         counter++;
+
+        if (pivots_size == max_iteration)
+            goto optimal;
     }
 
 optimal:
     // printf("\nNo entering var. Optimal value of %5.3f has been reached.\n", z);
-    // printFinalVariables(lp.b, b_labels, nonbasic);
+    // printFinalVariables(b, b_labels, nonbasic);
     for (int row = 0; row < lp.m; ++row) {
-        lp.x[b_labels[row]] = lp.b[row];
+        lp.x[b_labels[row]] = b[row];
     }
     for (int col = 0; col < lp.n; ++col) {
         lp.x[nonbasic[col]] = 0.0;

@@ -8,7 +8,166 @@
 #include <iostream>
 #include <numeric>
 #include <ostream>
+#include <string>
 #include <vector>
+#ifndef NDEBUG
+#define ASSERT(expr, ...)                                                                                                                            \
+    do {                                                                                                                                             \
+        if (!(expr)) {                                                                                                                               \
+            printf("%s(%d): Assertion failed.\n", __FILE__, __LINE__);                                                                               \
+            printf(__VA_ARGS__);                                                                                                                     \
+            abort();                                                                                                                                 \
+        }                                                                                                                                            \
+    } while (false)
+#else
+#define ASSERT(...)
+#endif
+#define ASSERT_RANGE(value, left, right) ASSERT((left <= value) && (value < right), "`%s` (%d) is out of range [%d, %d)", #value, value, left, right)
+
+using namespace std;
+template <class T, int max_size> struct Stack {
+    array<T, max_size> data;
+    int right;
+    inline Stack() : data(), right(0) {}
+    inline Stack(const int n) : data(), right(0) { resize(n); }
+    inline Stack(const int n, const T& val) : data(), right(0) { resize(n, val); }
+    inline Stack(const initializer_list<T>& init) : data(), right(init.size()) {
+        memcpy(&data[0], init.begin(), sizeof(T) * init.size());
+    }                                                           // これ大丈夫か？
+    inline Stack(const Stack& rhs) : data(), right(rhs.right) { // コピー
+        for (int i = 0; i < right; i++) {
+            data[i] = rhs.data[i];
+        }
+    }
+    template <class S> inline Stack(const Stack<S, max_size>& rhs) : data(), right(rhs.right) {
+        for (int i = 0; i < right; i++) {
+            data[i] = rhs.data[i];
+        }
+    }
+    Stack& operator=(const Stack& rhs) {
+        right = rhs.right;
+        for (int i = 0; i < right; i++) {
+            data[i] = rhs.data[i];
+        }
+        return *this;
+    }
+    Stack& operator=(const vector<T>& rhs) {
+        right = (int)rhs.size();
+        ASSERT(right <= max_size, "too big vector");
+        for (int i = 0; i < right; i++) {
+            data[i] = rhs[i];
+        }
+        return *this;
+    }
+    Stack& operator=(Stack&&) = default;
+    inline bool empty() const { return 0 == right; }
+    inline void push(const T& value) {
+        ASSERT_RANGE(right, 0, max_size);
+        data[right] = value;
+        right++;
+    }
+    inline T pop() {
+        right--;
+        ASSERT_RANGE(right, 0, max_size);
+        return data[right];
+    }
+    const inline T& top() const { return data[right - 1]; }
+    template <class... Args> inline void emplace(const Args&... args) {
+        ASSERT_RANGE(right, 0, max_size);
+        data[right] = T(args...);
+        right++;
+    }
+    inline void clear() { right = 0; }
+    inline void insert(const int& idx, const T& value) {
+        ASSERT_RANGE(idx, 0, right + 1);
+        ASSERT_RANGE(right, 0, max_size);
+        int i = right;
+        right++;
+        while (i != idx) {
+            data[i] = data[i - 1];
+            i--;
+        }
+        data[idx] = value;
+    }
+    inline void del(const int& idx) {
+        ASSERT_RANGE(idx, 0, right);
+        right--;
+        for (int i = idx; i < right; i++) {
+            data[i] = data[i + 1];
+        }
+    }
+    inline int index(const T& value) const {
+        for (int i = 0; i < right; i++) {
+            if (value == data[i])
+                return i;
+        }
+        return -1;
+    }
+    inline void remove(const T& value) {
+        int idx = index(value);
+        ASSERT(idx != -1, "not contain the value.");
+        del(idx);
+    }
+    inline void resize(const int& sz) {
+        ASSERT_RANGE(sz, 0, max_size + 1);
+        for (; right < sz; right++) {
+            data[right].~T();
+            new (&data[right]) T();
+        }
+        right = sz;
+    }
+    inline void resize(const int& sz, const T& fill_value) {
+        ASSERT_RANGE(sz, 0, max_size + 1);
+        for (; right < sz; right++) {
+            data[right].~T();
+            new (&data[right]) T(fill_value);
+        }
+        right = sz;
+    }
+    inline int size() const { return right; }
+    inline T& operator[](const int n) {
+        ASSERT_RANGE(n, 0, right);
+        return data[n];
+    }
+    inline const T& operator[](const int n) const {
+        ASSERT_RANGE(n, 0, right);
+        return data[n];
+    }
+    inline T* begin() { return (T*)data.data(); }
+    inline const T* begin() const { return (const T*)data.data(); }
+    inline T* end() { return (T*)data.data() + right; }
+    inline const T* end() const { return (const T*)data.data() + right; }
+    inline T& front() {
+        ASSERT(right > 0, "no data.");
+        return data[0];
+    }
+    const inline T& front() const {
+        ASSERT(right > 0, "no data.");
+        return data[0];
+    }
+    inline T& back() {
+        ASSERT(right > 0, "no data.");
+        return data[right - 1];
+    }
+    const inline T& back() const {
+        ASSERT(right > 0, "no data.");
+        return data[right - 1];
+    }
+    inline bool contains(const T& value) const {
+        for (const auto& dat : *this) {
+            if (value == dat)
+                return true;
+        }
+        return false;
+    }
+    inline vector<T> ToVector() { return vector<T>(begin(), end()); }
+    inline void Print(ostream& os = cout) {
+        for (int i = 0; i < right; i++) {
+            os << data[i] << (i == right - 1 ? "" : " ");
+        }
+        os << endl;
+    }
+};
 
 namespace simplex {
 using namespace std;
@@ -20,13 +179,68 @@ constexpr auto MAX_M = 240;
 constexpr auto MAX_PIVOTS_SIZE = 2000;
 static_assert(MAX_N % 8 == 0);
 static_assert(MAX_M % 8 == 0);
+constexpr auto MAX_N_COMPONENTS = 100000;
+
+template <typename T> struct Slice {
+    T *left, *right;
+    inline Slice(T* const& l, T* const& r) : left(l), right(r) {}
+    inline T* begin() { return left; }
+    inline const T* begin() const { return (const T*)left; }
+    inline T* end() { return right; }
+    inline const T* end() const { return (const T*)right; }
+    inline int size() const { return distance(left, right); }
+    inline T& operator[](const int& idx) { return left[idx]; }
+    inline const T& operator[](const int& idx) const { return left[idx]; }
+};
+
+struct SparseMatrixComponent {
+    int row, col;
+    double weight;
+};
+
+template <int max_n_cols, int max_n_components> struct CSCMatrix {
+    struct Component {
+        int row;
+        double weight;
+    };
+    int n_cols, n_components;
+    array<Component, max_n_components> components;
+    array<int, max_n_cols + 1> lefts;
+
+    CSCMatrix() = default;
+    template <class ContainerOfSparseMatrixComponents> CSCMatrix(const int& n_cols_, ContainerOfSparseMatrixComponents edges_) {
+        // edges_ は 0-origin, 同じ要素の重複は未定義動作を起こすので注意
+        assert(n_cols_ <= max_n_cols);
+        assert(edges_.size() <= max_n_components);
+        n_cols = n_cols_;
+        n_components = edges_.size();
+        sort(edges_.begin(), edges_.end(), [](const auto& l, const auto& r) { return make_pair(l.col, l.row) < make_pair(r.col, r.row); });
+        for (int i = 0; i < n_components; i++) {
+            components[i] = {edges_[i].row, edges_[i].weight};
+        }
+        auto idx_edges = 0;
+        for (int col = 0; col <= n_cols; col++) {
+            lefts[col] = idx_edges;
+            while (idx_edges < n_components && edges_[idx_edges].col == col) {
+                idx_edges++;
+            }
+        }
+    }
+    inline Slice<Component> operator[](const int& col) {
+        return Slice<Component>(components.begin() + lefts[col], components.begin() + lefts[col + 1]);
+    }
+    inline Slice<Component> operator[](const int& col) const {
+        return Slice<Component>(components.begin() + lefts[col], components.begin() + lefts[col + 1]);
+    }
+};
 
 struct LPProblem {
     // maximize c^T x
     // s.t. Ax <= b
     enum class Status { NONE, OPTIMAL, INFEASIBLE, UNBOUNDED };
-    alignas(64) array<double, MAX_N + MAX_M> c;               // n
-    alignas(64) array<array<double, MAX_N + MAX_M>, MAX_M> A; // m * n
+    alignas(64) array<double, MAX_N + MAX_M> c; // n
+    // alignas(64) array<array<double, MAX_N + MAX_M>, MAX_M> A; // m * n
+    Stack<SparseMatrixComponent, MAX_N_COMPONENTS> A_components;
     alignas(64) array<double, MAX_M> b;
     alignas(64) array<double, MAX_N + MAX_M> x; // スラック変数を含む解
     int n, m;                                   // 変数の数、制約の数
@@ -55,10 +269,15 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
     iota(nonbasic.begin(), nonbasic.end(), 0);
 
     // A のスラック変数の列を単位行列で初期化
+    static auto A_components = Stack<SparseMatrixComponent, MAX_N_COMPONENTS>();
+    A_components = lp.A_components;
     for (int row = 0; row < lp.m; ++row) {
-        fill(&lp.A[row][lp.n], &lp.A[row][lp.n + lp.m], 0.0);
-        lp.A[row][lp.n + row] = 1.0;
+        A_components.push({row, lp.n + row, 1.0});
     }
+
+    // A を構築
+    static auto A = CSCMatrix<MAX_N + MAX_M, MAX_N_COMPONENTS>();
+    new (&A) decltype(A)(lp.n + lp.m, A_components);
 
     // b が 0 以上であることを確認
     for (int row = 0; row < lp.m; ++row) {
@@ -116,13 +335,17 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
         static array<Variable, MAX_N> cnbars; // \bar{c_N} の成分のうち、値が正であるもの
         auto cnbars_size = 0;
 
+        // このループが実行時間の 7 割
         for (int i = 0; i < lp.n; ++i) {
             const int& var_label = nonbasic[i];
             const double& cni = lp.c[var_label]; // c_N の i 番目
             double yai = 0.0;                    // ya の i 番目
-            for (int idx_y = 0; idx_y < lp.m; ++idx_y) {
-                yai += y[idx_y] * lp.A[idx_y][var_label];
+            for (const auto& a : A[var_label]) {
+                yai += y[a.row] * a.weight;
             }
+            // for (int idx_y = 0; idx_y < lp.m; ++idx_y) {
+            //     yai += y[idx_y] * lp.A[idx_y][var_label];
+            // }
             const double cnbar = cni - yai;
             if (cnbar > epsilon1) {
                 cnbars[cnbars_size] = {var_label, i, cnbar};
@@ -159,9 +382,13 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
             const auto& entering_label = cnbars[entering_variable_index].label;
 
             // d を、基底に追加する列 a で初期化
-            for (int row = 0; row < lp.m; ++row) {
-                d[row] = lp.A[row][entering_label];
+            fill(d.begin(), d.begin() + lp.m, 0.0);
+            for (const auto& a : A[entering_label]) {
+                d[a.row] = a.weight;
             }
+            // for (int row = 0; row < lp.m; ++row) {
+            //     d[row] = lp.A[row][entering_label];
+            // }
 
             // イータ行列の逆行列を順に掛けて d を求める
             for (int idx_pivots = 0; idx_pivots < pivots_size; idx_pivots++) {
@@ -269,14 +496,22 @@ int main(int argc, const char* argv[]) {
             if (col == lp.n) {
                 cin >> lp.b[row];
             } else {
-                cin >> lp.A[row][col];
+                double a;
+                cin >> a;
+                if (a != 0.0) {
+                    lp.A_components.push({row, col, a});
+                }
             }
         }
     }
 
-    simplex::Solve(lp);
-    simplex::Solve(lp);
-    simplex::Solve(lp);
+    assert(argc == 2);
+    auto max_iter = stoi(argv[1]);
+    simplex::Solve(lp, max_iter);
+    simplex::Solve(lp, max_iter);
+    simplex::Solve(lp, max_iter);
+    simplex::Solve(lp, max_iter);
+    simplex::Solve(lp, max_iter);
     cout << "optimal value: " << lp.z << endl;
     lp.PrintSolution();
 }

@@ -5,6 +5,28 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "gdb",
+            "request": "launch",
+            "name": "DebugSimplex2",
+            "target": "${workspaceFolder}/exp002_simplex/a.out",
+            "cwd": "${workspaceFolder}/exp002_simplex/",
+            "valuesFormatting": "parseText",
+            "arguments": "1000 < in2.txt > out2.txt"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "DebugSimplex",
+            "program": "${workspaceFolder}/exp002_simplex/a.out",
+            "args": [],
+            "cwd": "${workspaceFolder}/exp002_simplex/",
+            "setupCommands": [
+                {
+                    "text": "settings set target.input-path in2.txt"
+                }
+            ],
+        },
+        {
             "type": "lldb",
             "request": "attach",
             "name": "Debug",

@@ -335,7 +335,6 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
         static array<Variable, MAX_N> cnbars; // \bar{c_N} の成分のうち、値が正であるもの
         auto cnbars_size = 0;
 
-        // このループが実行時間の 7 割
         for (int i = 0; i < lp.n; ++i) {
             const int& var_label = nonbasic[i];
             const double& cni = lp.c[var_label]; // c_N の i 番目
@@ -343,9 +342,6 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
             for (const auto& a : A[var_label]) {
                 yai += y[a.row] * a.weight;
             }
-            // for (int idx_y = 0; idx_y < lp.m; ++idx_y) {
-            //     yai += y[idx_y] * lp.A[idx_y][var_label];
-            // }
             const double cnbar = cni - yai;
             if (cnbar > epsilon1) {
                 cnbars[cnbars_size] = {var_label, i, cnbar};
@@ -386,9 +382,6 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
             for (const auto& a : A[entering_label]) {
                 d[a.row] = a.weight;
             }
-            // for (int row = 0; row < lp.m; ++row) {
-            //     d[row] = lp.A[row][entering_label];
-            // }
 
             // イータ行列の逆行列を順に掛けて d を求める
             for (int idx_pivots = 0; idx_pivots < pivots_size; idx_pivots++) {

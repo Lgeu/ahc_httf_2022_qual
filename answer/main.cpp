@@ -840,20 +840,71 @@ template <int max_n, int max_m> struct Graph {
 namespace simplex {
 using namespace std;
 
-constexpr double epsilon1 = 0.00001;
-constexpr double epsilon2 = 0.00000001;
-constexpr auto MAX_N = 5000;
-constexpr auto MAX_M = 240;
-constexpr auto MAX_PIVOTS_SIZE = 2000;
-static_assert(MAX_N % 8 == 0);
-static_assert(MAX_M % 8 == 0);
+template <typename T> struct Slice {
+    T *left, *right;
+    inline Slice(T* const& l, T* const& r) : left(l), right(r) {}
+    inline T* begin() { return left; }
+    inline const T* begin() const { return (const T*)left; }
+    inline T* end() { return right; }
+    inline const T* end() const { return (const T*)right; }
+    inline int size() const { return distance(left, right); }
+    inline T& operator[](const int& idx) { return left[idx]; }
+    inline const T& operator[](const int& idx) const { return left[idx]; }
+};
 
-struct LPProblem {
+struct SparseMatrixComponent {
+    int row, col;
+    double weight;
+};
+
+template <int max_n_cols, int max_n_components> struct CSCMatrix {
+    struct Component {
+        int row;
+        double weight;
+    };
+    int n_cols, n_components;
+    array<Component, max_n_components> components;
+    array<int, max_n_cols + 1> lefts;
+
+    CSCMatrix() = default;
+    template <class ContainerOfSparseMatrixComponents> CSCMatrix(const int& n_cols_, ContainerOfSparseMatrixComponents edges_) {
+        // edges_ は 0-origin, 同じ要素の重複は未定義動作を起こすので注意
+        assert(n_cols_ <= max_n_cols);
+        assert(edges_.size() <= max_n_components);
+        n_cols = n_cols_;
+        n_components = edges_.size();
+        sort(edges_.begin(), edges_.end(), [](const auto& l, const auto& r) { return make_pair(l.col, l.row) < make_pair(r.col, r.row); });
+        for (int i = 0; i < n_components; i++) {
+            components[i] = {edges_[i].row, edges_[i].weight};
+        }
+        auto idx_edges = 0;
+        for (int col = 0; col <= n_cols; col++) {
+            lefts[col] = idx_edges;
+            while (idx_edges < n_components && edges_[idx_edges].col == col) {
+                idx_edges++;
+            }
+        }
+    }
+    inline Slice<Component> operator[](const int& col) {
+        return Slice<Component>(components.begin() + lefts[col], components.begin() + lefts[col + 1]);
+    }
+    inline Slice<Component> operator[](const int& col) const {
+        return Slice<Component>(components.begin() + lefts[col], components.begin() + lefts[col + 1]);
+    }
+};
+
+template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> struct LPProblem {
     // maximize c^T x
     // s.t. Ax <= b
+
+    static_assert(MAX_N % 8 == 0);
+    static_assert(MAX_M % 8 == 0);
+
+    // 問題を設定するには、n, m, c, A_components, b に値を入れる
     enum class Status { NONE, OPTIMAL, INFEASIBLE, UNBOUNDED };
-    alignas(64) array<double, MAX_N + MAX_M> c;               // n
-    alignas(64) array<array<double, MAX_N + MAX_M>, MAX_M> A; // m * n
+    alignas(64) array<double, MAX_N + MAX_M> c; // n
+    // alignas(64) array<array<double, MAX_N + MAX_M>, MAX_M> A; // m * n
+    Stack<SparseMatrixComponent, MAX_N_COMPONENTS> A_components; // 係数の非ゼロ要素
     alignas(64) array<double, MAX_M> b;
     alignas(64) array<double, MAX_N + MAX_M> x; // スラック変数を含む解
     int n, m;                                   // 変数の数、制約の数
@@ -866,7 +917,11 @@ struct LPProblem {
     }
 };
 
-void Solve(LPProblem& lp, const int& max_iteration = 2000) {
+template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>& lp, const int& max_iteration = 2000) {
+
+    constexpr double epsilon1 = 0.00001;
+    constexpr double epsilon2 = 0.00000001;
+    constexpr auto MAX_PIVOTS_SIZE = 2000;
 
     // スラック変数を含めた目的関数の係数にする
     fill(lp.c.begin() + lp.n, lp.c.begin() + (lp.n + lp.m), 0.0);
@@ -882,15 +937,20 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
     iota(nonbasic.begin(), nonbasic.end(), 0);
 
     // A のスラック変数の列を単位行列で初期化
+    static auto A_components = Stack<SparseMatrixComponent, MAX_N_COMPONENTS>();
+    A_components = lp.A_components;
     for (int row = 0; row < lp.m; ++row) {
-        fill(&lp.A[row][lp.n], &lp.A[row][lp.n + lp.m], 0.0);
-        lp.A[row][lp.n + row] = 1.0;
+        A_components.push({row, lp.n + row, 1.0});
     }
+
+    // A を構築
+    static auto A = CSCMatrix<MAX_N + MAX_M, MAX_N_COMPONENTS>();
+    new (&A) decltype(A)(lp.n + lp.m, A_components);
 
     // b が 0 以上であることを確認
     for (int row = 0; row < lp.m; ++row) {
         if (b[row] < 0.0) {
-            lp.status = LPProblem::Status::INFEASIBLE;
+            lp.status = LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>::Status::INFEASIBLE;
             return;
         }
     }
@@ -947,8 +1007,8 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
             const int& var_label = nonbasic[i];
             const double& cni = lp.c[var_label]; // c_N の i 番目
             double yai = 0.0;                    // ya の i 番目
-            for (int idx_y = 0; idx_y < lp.m; ++idx_y) {
-                yai += y[idx_y] * lp.A[idx_y][var_label];
+            for (const auto& a : A[var_label]) {
+                yai += y[a.row] * a.weight;
             }
             const double cnbar = cni - yai;
             if (cnbar > epsilon1) {
@@ -986,8 +1046,9 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
             const auto& entering_label = cnbars[entering_variable_index].label;
 
             // d を、基底に追加する列 a で初期化
-            for (int row = 0; row < lp.m; ++row) {
-                d[row] = lp.A[row][entering_label];
+            fill(d.begin(), d.begin() + lp.m, 0.0);
+            for (const auto& a : A[entering_label]) {
+                d[a.row] = a.weight;
             }
 
             // イータ行列の逆行列を順に掛けて d を求める
@@ -1022,7 +1083,7 @@ void Solve(LPProblem& lp, const int& max_iteration = 2000) {
 
             // 比率が計算されなければ非有界なので終了する
             if (leaving_label == -1) {
-                lp.status = LPProblem::Status::UNBOUNDED;
+                lp.status = LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>::Status::UNBOUNDED;
                 return;
             }
 
@@ -1074,11 +1135,17 @@ optimal:
         lp.x[nonbasic[col]] = 0.0;
     }
     lp.z = z;
-    lp.status = LPProblem::Status::OPTIMAL;
+    lp.status = LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>::Status::OPTIMAL;
 }
 } // namespace simplex
 
 // ========================== ライブラリここまで ==========================
+
+#ifdef NDEBUG
+constexpr auto DEBUG_STATS = false; // ここは固定
+#else
+constexpr auto DEBUG_STATS = true;
+#endif
 
 namespace input {
 constexpr auto N = 1000;             // タスク数
@@ -1099,13 +1166,14 @@ struct CompletedTask {
 };
 auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
 enum class TaskStatus { NotStarted, InProgress, Completed };
-auto task_status = array<TaskStatus, input::N>();
-auto member_status = array<int, input::M>(); // -1: 空き
-auto starting_times = array<int, input::M>();
-auto in_dims = array<int, input::N>(); // 入次数
-auto open_tasks = Stack<int, input::N>();
-auto open_members = Stack<int, input::N>();
-auto rng = Random(3141592);
+auto task_status = array<TaskStatus, input::N>(); // タスクの状態
+auto member_status = array<int, input::M>();      // -1: 空き, それ以外: 今やってるタスク
+auto starting_times = array<int, input::M>();     // メンバーがタスクを始めた時刻
+auto in_dims = array<int, input::N>();            // 入次数、0 になったら自由に実行できる
+auto open_tasks = Stack<int, input::N>();         // 自由に実行できるタスク
+auto open_members = Stack<int, input::N>();       // 手の空いたメンバー
+auto rng = Random(3141592);                       // 乱数生成器
+auto level = array<double, input::N>();           // 後にどれくらいのタスクがつっかえてるか
 
 } // namespace common
 
@@ -1132,8 +1200,10 @@ auto initial_expected_time = array<double, 41>();
 constexpr auto initial_expected_skill =
     array<double, 11>{10.34388673, 9.84151079, 9.40491307, 9.02080870, 8.67996031, 8.37518411,
                       8.10086558,  7.85121853, 7.62445622, 7.41485945, 7.22255002}; // [技能数 - 10] := スキルの予測値
-auto expected_time = array<array<double, input::M>, input::N>();                    // 期待所要時間
-auto expected_skill = array<array<double, 20>, input::M>();                         // 各メンバーの能力の予測値
+auto task_weights = array<double, input::N>();                      // タスクの重み: そのタスクに平均的にかかる時間
+auto expected_time = array<array<double, input::M>, input::N>();    // 期待所要時間
+auto expected_skill = array<array<double, 20>, input::M>();         // 各メンバーの能力の予測値
+auto expected_squared_skill = array<array<double, 20>, input::M>(); // 各メンバーの能力の 2 乗の予測値
 inline void PrintExpectedSkill(const int& member) {
 #ifdef VISUALIZE
     cout << "#s " << member + 1;
@@ -1306,13 +1376,15 @@ auto state = array<State, input::M>(); // [メンバー] := 現在のサンプ�
 void Initialize() {
     ASSERT(input::K != 0, "input がまだだよ");
     initial_expected_time = initial_expected_time_all[input::K - 10];
+    // タスクに対する予測の初期化
     rep(task, input::N) {
-        rep(member, input::M) {
-            rep(skill, input::K) { expected_time[task][member] += initial_expected_time[input::d[task][skill]]; }
-        }
+        rep(skill, input::K) { task_weights[task] += initial_expected_time[input::d[task][skill]]; }
+        rep(member, input::M) { expected_time[task][member] = task_weights[task]; }
     }
+    // メンバーに対する予測の初期化
     rep(member, input::M) {
         rep(skill, input::K) { expected_skill[member][skill] = initial_expected_skill[input::K - 10]; }
+        // TODO: expected_squared_skill の初期化
         new (&mh::state[member]) remove_reference<decltype(mh::state[member])>::type(member);
         PrintExpectedSkill(member);
     }
@@ -1329,18 +1401,29 @@ inline void Update(const int& member) {
         state.Update();
         rep(skill, input::K) {
             constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 0.0001;
+            const auto sampled_skill_value = abs(state.skills_base[skill]) * (state.l2_norm / state.root_sum_square_skills_base);
             expected_skill[member][skill] *= 1.0 - EXPECTED_SKILL_EMA_ALPHA;
-            expected_skill[member][skill] +=
-                EXPECTED_SKILL_EMA_ALPHA * (abs(state.skills_base[skill]) * (state.l2_norm / state.root_sum_square_skills_base));
+            expected_skill[member][skill] += EXPECTED_SKILL_EMA_ALPHA * sampled_skill_value;
+            expected_squared_skill[member][skill] *= 1.0 - EXPECTED_SKILL_EMA_ALPHA;
+            expected_squared_skill[member][skill] += EXPECTED_SKILL_EMA_ALPHA * (sampled_skill_value * sampled_skill_value);
         }
     }
 
     // TODO
+    // 各タスクの予測
     // for (const auto& task : task_queue) {
     //     expected_time[task][member] = hogehoge
     // }
 }
 } // namespace prediction
+
+namespace minimization {
+constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
+constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
+constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
+constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
+
+} // namespace minimization
 
 // ========================== main loop ==========================
 
@@ -1456,7 +1539,15 @@ void Solve() {
         // グラフ作成
         new (&input::G) decltype(input::G)(input::N, input::edges);
 
+        // 予測関連初期化
         prediction::Initialize();
+
+        // タスクの優先度を設定
+        sort(input::edges.begin(), input::edges.end());
+        for (int i = input::R - 1; i >= 0; i--) {
+            const auto& edge = input::edges[i];
+            chmax(common::level[edge.from], common::level[edge.to] + prediction::initial_expected_time[edge.to]);
+        }
     }
 
     GreedySolution();

@@ -8,3 +8,4 @@ x64
 !answer/out.txt
 !compile_flags.txt
 *.data
+*.data.old

@@ -1153,7 +1153,7 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
-constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 1e-5;
+constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-3;
 constexpr auto MCMC_N_SAMPLING = 1000;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 
@@ -1182,7 +1182,7 @@ auto expected_complete_dates = array<double, input::M>(); // 終了予定時刻
 auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
 auto in_dims = array<int, input::N>();                    // 入次数、0 になったら open (自由に実行できる)
 auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
-auto rng = Random(3141592);                               // 乱数生成器
+auto rng = Random(3141592653);                            // 乱数生成器
 auto level = array<double, input::N>();                   // 後にどれくらいのタスクがつっかえてるか
 auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
@@ -1662,9 +1662,6 @@ inline void SolveLoop() {
         for (const auto& idx : chosen_task_idxs) {
             // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
             const auto task = task_queue[idx];
-            // swap(open_tasks[0], open_tasks.back());
-            // open_tasks.pop();
-
             const auto member = open_members.back();
             open_members.pop();
 
@@ -1746,17 +1743,14 @@ inline void SolveLoop() {
         chosen.clear();
         for (const auto& member : open_members) {
             auto best_task = -1;
-            auto best_task_priority = 0.0;
+            auto best_task_priority = -1.0;
             for (const auto& task : task_queue) {
                 if (in_dims[task] != 0)
                     continue;
-                if (best_task == -1) {
-                    best_task = task;
-                    continue;
-                }
                 const auto& info = scheduling_info[task];
                 auto priority = info.member == member ? info.ratio : 0.0;
-                priority *= 1.0 + max(0.0, day - 900 + level[task]) * 0.02;
+                if (level[task] != 0.0)
+                    priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;
                 if (best_task_priority != priority) {
                     if (best_task_priority < priority) {
                         best_task_priority = priority;
@@ -1764,10 +1758,12 @@ inline void SolveLoop() {
                     }
                 } else if (level[task] != level[best_task]) {
                     if (level[best_task] < level[task]) {
+                        best_task_priority = priority;
                         best_task = task;
                     }
                 } else {
                     if (prediction::task_weights[best_task] < prediction::task_weights[task]) {
+                        best_task_priority = priority;
                         best_task = task;
                     }
                 }

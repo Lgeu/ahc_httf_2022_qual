@@ -1244,7 +1244,7 @@ struct Histogram {
     array<double, 61> data;
     double base;
     inline Histogram() : data(), base(EXPECTED_SKILL_EMA_ALPHA) {}
-    inline void SetInitialValue() { data = initial_histogram[input::K]; }
+    inline void SetInitialValue() { data = initial_histogram[input::K - 10]; }
     inline void AddData(const int& idx) {
         // データ追加
         base *= 1.0 / (1.0 - EXPECTED_SKILL_EMA_ALPHA);
@@ -1465,13 +1465,6 @@ inline void Update(const int& member) {
 }
 } // namespace prediction
 
-// namespace minimization {
-// constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
-// constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
-// constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
-
-// } // namespace minimization
-
 // ========================== main loop ==========================
 
 inline void UpdateQueue() {
@@ -1505,6 +1498,18 @@ inline void UpdateQueue() {
                 auto& hist = prediction::skill_histograms[member][skill];
                 auto& fms = f[member][skill];
                 hist.Normalize();
+
+                if constexpr (DEBUG_STATS) {
+                    cout << "# skill_histograms[" << member << "][" << skill << "]=";
+                    auto sum_hist = 0.0;
+                    for (const auto& h : hist.data) {
+                        cout << h << " ";
+                        sum_hist += h;
+                    }
+                    cout << endl;
+                    cout << "# sum_hist=" << sum_hist << endl;
+                }
+
                 auto df = 0.0;
                 for (int i = 59; i >= 0; i--) { // fms[60] は 0.0 (そもそも 41 以上は使わないが…)
                     df += hist.data[i + 1];
@@ -1521,6 +1526,9 @@ inline void UpdateQueue() {
                 }
                 prediction::expected_time[task][member] =
                     max(1.0, prediction::expected_time[task][member]); // これはまあ正確ではない (そんなこと言ったら色んな場所が正確でゎない…)
+                if constexpr (DEBUG_STATS) {
+                    cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member] << endl;
+                }
             }
         }
     }

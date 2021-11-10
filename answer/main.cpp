@@ -56,6 +56,8 @@
 #endif // defined(__clang__)
 #endif // defined(__GNUC__)
 
+constexpr auto DEBUG_SIMPLEX = true;
+
 // ========================== macroes ==========================
 
 #define rep(i, n) for (auto i = 0; (i) < (n); (i)++)
@@ -838,7 +840,6 @@ template <int max_n, int max_m> struct Graph {
 };
 
 namespace simplex {
-using namespace std;
 
 template <typename T> struct Slice {
     T *left, *right;
@@ -914,6 +915,13 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> struct LPProblem {
         for (int i = 0; i < n; i++) {
             os << x[i] << " \n"[i == n - 1];
         }
+    }
+    void Reset(const int& n_, const int& m_) {
+        n = n_;
+        m = m_;
+        A_components.clear();
+        fill(b.begin(), b.begin() + m, 0.0);
+        fill(c.begin(), c.begin() + n, 0.0);
     }
 };
 
@@ -1136,6 +1144,9 @@ optimal:
     }
     lp.z = z;
     lp.status = LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>::Status::OPTIMAL;
+    if constexpr (DEBUG_SIMPLEX) {
+        cerr << "[simplex] iteration = " << pivots_size << endl;
+    }
 }
 } // namespace simplex
 
@@ -1170,15 +1181,15 @@ struct CompletedTask {
 };
 auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
-auto task_status = array<TaskStatus, input::N>(); // タスクの状態。open かどうかは関係ないことに注意
-auto member_status = array<int, input::M>();      // -1: 空き, それ以外: 今やってるタスク
-auto starting_times = array<int, input::M>();     // メンバーがタスクを始めた時刻
-auto in_dims = array<int, input::N>();            // 入次数、0 になったら open (自由に実行できる)
-// auto open_tasks = Stack<int, input::N>();                 // 自由に実行できるタスク
+auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
+auto member_status = array<int, input::M>();              // -1: 空き, それ以外: 今やってるタスク
+auto expected_complete_date = array<int, input::M>();     // 終了予定時刻  TODO: 更新
+auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
+auto in_dims = array<int, input::N>();                    // 入次数、0 になったら open (自由に実行できる)
 auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
 auto rng = Random(3141592);                               // 乱数生成器
 auto level = array<double, input::N>();                   // 後にどれくらいのタスクがつっかえてるか
-auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク  TODO: 更新
+auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
 auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
 
@@ -1450,12 +1461,12 @@ inline void Update(const int& member) {
 }
 } // namespace prediction
 
-namespace minimization {
-constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
-constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
-constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
+// namespace minimization {
+// constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
+// constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
+// constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
 
-} // namespace minimization
+// } // namespace minimization
 
 // ========================== main loop ==========================
 
@@ -1511,6 +1522,48 @@ inline void UpdateQueue() {
     }
 
     // 3. task の割当を行う
+    {
+        // TODO
+        // オフセットを忘れない！！！！
+        constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
+        constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
+        constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
+        const auto n_minimization_tasks = common::task_queue.size(); // 最適化するタスクの数
+
+        static auto lp = simplex::LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>();
+        lp.Reset(n_minimization_tasks * input::M + 2, n_minimization_tasks + input::M + 1); // 変数の数、制約の数
+
+        // 制約の設定
+        const auto objective_variable = n_minimization_tasks * input::M;
+        const auto one_variable = objective_variable + 1;
+        auto GetVariable = [&](const int& member, const int& idx_task_queue) { return n_minimization_tasks * member + idx_task_queue; };
+        rep(member, input::M) {
+            rep(idx_task_queue, n_minimization_tasks) {
+                const auto& task = common::task_queue[idx_task_queue];
+                // (1) 目的変数の値は、各メンバーの合計時間より大きい
+                lp.A_components.push({member, GetVariable(member, idx_task_queue), prediction::expected_time[task][member]});
+                // (2) 各タスクの割当合計は 1 以上
+                lp.A_components.push({input::M + idx_task_queue, GetVariable(member, idx_task_queue), -1.0});
+            }
+            // (1)
+            lp.A_components.push({member, objective_variable, -1.0});
+            lp.b[member] = 0.0;
+        }
+        rep(idx_task_queue, n_minimization_tasks) {
+            // (2)
+            lp.A_components.push({input::M + idx_task_queue, one_variable, 1.0});
+            lp.b[input::M + idx_task_queue] = 0.0;
+        }
+        // (3) 定数 1
+        lp.A_components.push({input::M + n_minimization_tasks, one_variable, 1.0});
+        lp.b[input::M + n_minimization_tasks] = 1.0;
+
+        // 目的関数の設定
+        lp.c[objective_variable] = -1.0;
+        lp.c[one_variable] = 10000.0;
+
+        simplex::Solve(lp);
+    }
 }
 
 inline void GreedySolution() {

@@ -1,3 +1,4 @@
+#include <immintrin.h>
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -42,17 +43,15 @@
 #ifdef __GNUC__
 #ifdef __clang__
 #pragma clang attribute push(__attribute__((target("arch=skylake"))), apply_to = function)
-//#pragma clang attribute push(__attribute__((target("avx,avx2"))), apply_to = function)
 /* 最後に↓を貼る
 #ifdef __clang__
 #pragma clang attribute pop
 #endif
 */
 #else // defined(__clang__)
-//#pragma GCC target("sse,sse2,sse3,ssse3,sse4,popcnt,abm,mmx,avx,avx2,tune=native")
 //#pragma GCC optimize("O3")
-#pragma GCC target("avx,avx2,tune=native")
 #pragma GCC optimize("Ofast")
+#pragma GCC target("sse,sse2,sse3,ssse3,sse4,popcnt,abm,mmx,fma,avx,avx2,tune=native")
 //#pragma GCC optimize("unroll-loops")
 #endif // defined(__clang__)
 #endif // defined(__GNUC__)
@@ -620,6 +619,7 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> struct LPProblem {
 };
 
 template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>& lp, const int& max_iteration = 2000) {
+    static_assert(MAX_M % 16 == 0);
 
     constexpr double epsilon1 = 0.00001;
     constexpr double epsilon2 = 0.00000001;
@@ -665,15 +665,15 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
         int col;
     };
 
-    int counter = 1;                           // イテレーション回数
-    static array<Eta, MAX_PIVOTS_SIZE> pivots; // 過去のピボットを表すイータ行列
-    int pivots_size = 0;                       // イータ行列の個数
-    double z = 0.0;                            // 目的関数の初期値
+    int counter = 1;                             // イテレーション回数
+    static array<Eta, MAX_PIVOTS_SIZE> pivots{}; // 過去のピボットを表すイータ行列
+    int pivots_size = 0;                         // イータ行列の個数
+    double z = 0.0;                              // 目的関数の初期値
+    alignas(64) static array<double, MAX_M> y{}; // 長さ m
 
     // 改訂シンプレックス法
     while (true) {
         // イータ行列を使って y を計算 (yB = c_b を解く)
-        static array<double, MAX_M> y; // 長さ m
 
         // y を c_b で初期化
         for (int row = 0; row < lp.m; ++row) {
@@ -687,9 +687,23 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
             const Eta& pivot = pivots[idx_pivots];
             const int col_to_change = pivot.col;
             double y_original = y[col_to_change] + pivot.values[col_to_change] * y[col_to_change];
-            for (int row = 0; row < lp.m; ++row) {
-                y_original -= pivot.values[row] * y[row]; // ！！！ここが重い！！！
+            auto inner_prod_0 = _mm256_set1_pd(0.0);
+            auto inner_prod_1 = _mm256_set1_pd(0.0);
+            auto inner_prod_2 = _mm256_set1_pd(0.0);
+            auto inner_prod_3 = _mm256_set1_pd(0.0);
+            for (int row = 0; row < ((lp.m - 1) / 16 + 1) * 16; row += 16) {
+                inner_prod_0 = _mm256_fmadd_pd(*(__m256d*)&pivot.values[row], *(__m256d*)&y[row], inner_prod_0);
+                inner_prod_1 = _mm256_fmadd_pd(*(__m256d*)&pivot.values[row + 4], *(__m256d*)&y[row + 4], inner_prod_1);
+                inner_prod_2 = _mm256_fmadd_pd(*(__m256d*)&pivot.values[row + 8], *(__m256d*)&y[row + 8], inner_prod_2);
+                inner_prod_3 = _mm256_fmadd_pd(*(__m256d*)&pivot.values[row + 12], *(__m256d*)&y[row + 12], inner_prod_3);
             }
+            inner_prod_0 = _mm256_add_pd(inner_prod_0, inner_prod_1);
+            inner_prod_2 = _mm256_add_pd(inner_prod_2, inner_prod_3);
+            inner_prod_0 = _mm256_add_pd(inner_prod_0, inner_prod_2);
+            y_original -= (((double*)&inner_prod_0)[0] + ((double*)&inner_prod_0)[2]) + (((double*)&inner_prod_0)[1] + ((double*)&inner_prod_0)[3]);
+            // for (int row = 0; row < lp.m; ++row) {
+            //     y_original -= pivot.values[row] * y[row]; // ！！！ここが重い！！！
+            // }
             y[col_to_change] = y_original / pivot.values[col_to_change];
         }
 

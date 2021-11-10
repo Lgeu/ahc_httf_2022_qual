@@ -1153,8 +1153,8 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
-constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 0.0001;
-constexpr auto MCMC_N_SAMPLING = 10000;
+constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 1e-5;
+constexpr auto MCMC_N_SAMPLING = 5000;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 
 namespace input {
@@ -1222,9 +1222,10 @@ auto initial_expected_time = array<double, 41>();
 constexpr auto initial_expected_skill =
     array<double, 11>{10.34388673, 9.84151079, 9.40491307, 9.02080870, 8.67996031, 8.37518411,
                       8.10086558,  7.85121853, 7.62445622, 7.41485945, 7.22255002}; // [技能数 - 10] := スキルの予測値
-auto task_weights = array<double, input::N>();                   // タスクの重み: そのタスクに平均的にかかる時間
-auto expected_time = array<array<double, input::M>, input::N>(); // 期待所要時間
-auto expected_skill = array<array<double, 20>, input::M>();      // 各メンバーの能力の予測値
+auto task_weights = array<double, input::N>();                         // タスクの重み: そのタスクに平均的にかかる時間
+auto expected_time = array<array<double, input::M>, input::N>();       // 期待所要時間
+auto expected_time_naive = array<array<double, input::M>, input::N>(); // 期待所要時間, 愚直計算
+auto expected_skill = array<array<double, 20>, input::M>();            // 各メンバーの能力の予測値
 // clang-format off
 constexpr auto initial_histogram = array<array<double, 61>, 21 - 10>{
     array<double, 61>{0.03199358,0.06368178,0.06305036,0.06192850,0.06043657,0.05849638,0.05626998,0.05378124,0.05096481,0.04803811,0.04487573,0.04173182,0.03857524,0.03535695,0.03231937,0.02933553,0.02657940,0.02393169,0.02151936,0.01931420,0.01728974,0.01544169,0.01377925,0.01225258,0.01088206,0.00960582,0.00847646,0.00745854,0.00652507,0.00568167,0.00493471,0.00427288,0.00366315,0.00314178,0.00266986,0.00225166,0.00188762,0.00157227,0.00130075,0.00105789,0.00086575,0.00069207,0.00054223,0.00043122,0.00032470,0.00024561,0.00018435,0.00013126,0.00009303,0.00006432,0.00004107,0.00002563,0.00001604,0.00000882,0.00000480,0.00000203,0.00000081,0.00000018,0.00000003,0.00000000,0.00000000},
@@ -1326,7 +1327,7 @@ struct State {
         const auto skill = rng.randint(input::K + 1);
         if (skill == input::K) {
             // 1. l2_norm だけ変更, 事前確率は変化しない
-            constexpr static auto MCMC_Q_L2_NORM_RANGE = 5.0;
+            constexpr static auto MCMC_Q_L2_NORM_RANGE = 10.0;
             const auto delta = (rng.random() - 0.5) * MCMC_Q_L2_NORM_RANGE;
             const auto tmp = l2_norm + delta;
             const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
@@ -1374,7 +1375,7 @@ struct State {
             const auto scale = l2_norm / root_sum_square_skills_base;
             double new_skill_base, delta_sum_square_skills_base, new_sum_square_skills_base, new_root_sum_square_skills_base, new_l2_norm;
             do {
-                constexpr static auto MCMC_Q_RANGE = 1.0;
+                constexpr static auto MCMC_Q_RANGE = 2.0;
                 const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
                 new_skill_base = skills_base[skill] + delta;
                 delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
@@ -1491,7 +1492,7 @@ inline void UpdateQueue() {
 
     // 2. queue 内の各タスクについて、かかる時間の予測を行う
     {
-        static auto f = array<array<array<double, 61>, 20>, input::M>(); // [メンバー][スキル種別][要求スキル値] := そのスキルでかかる時間
+        static auto f = array<array<array<double, 41>, 20>, input::M>(); // [メンバー][スキル種別][要求スキル値] := そのスキルでかかる時間
         rep(member, input::M) {
             rep(skill, input::K) {
                 // 2 階累積和で能力のヒストグラムから各要求スキル値でかかる時間へ変換する
@@ -1511,23 +1512,27 @@ inline void UpdateQueue() {
                 }
 
                 auto df = 0.0;
-                for (int i = 59; i >= 0; i--) { // fms[60] は 0.0 (そもそも 41 以上は使わないが…)
-                    df += hist.data[i + 1];
-                    fms[i] = fms[i + 1] + df;
+                rep1(i, 40) { // fms[0] は 0.0
+                    df += hist.data[i - 1];
+                    fms[i] = fms[i - 1] + df;
                 }
             }
         }
         for (const auto& task : common::task_queue) {
             rep(member, input::M) {
                 prediction::expected_time[task][member] = 0.0;
+                prediction::expected_time_naive[task][member] = 0.0;
                 rep(skill, input::K) {
                     // 作った表を引く
                     prediction::expected_time[task][member] += f[member][skill][input::d[task][skill]];
+                    prediction::expected_time_naive[task][member] += max(0.0, input::d[task][skill] - prediction::expected_skill[member][skill]);
                 }
                 prediction::expected_time[task][member] =
                     max(1.0, prediction::expected_time[task][member]); // これはまあ正確ではない (そんなこと言ったら色んな場所が正確でゎない…)
+                prediction::expected_time_naive[task][member] = max(1.0, prediction::expected_time_naive[task][member]);
                 if constexpr (DEBUG_STATS) {
-                    // cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member] << endl;
+                    // cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member]
+                    //      << "(naive:" << prediction::expected_time_naive[task][member] << ")" << endl;
                 }
             }
         }
@@ -1618,7 +1623,8 @@ inline void UpdateQueue() {
                 rep(idx_task_queue, n_minimization_tasks) {
                     const auto& task = common::task_queue[idx_task_queue];
                     sum += prediction::expected_time[task][member] * lp.x[GetVariable(member, idx_task_queue)];
-                    printf(" %3d %3.1f", (int)prediction::expected_time[task][member], lp.x[GetVariable(member, idx_task_queue)]);
+                    printf(" %3d(%3d) %3.1f", (int)prediction::expected_time[task][member], (int)prediction::expected_time_naive[task][member],
+                           lp.x[GetVariable(member, idx_task_queue)]);
                 }
                 printf(" = %6.1f", sum);
                 cout << endl;

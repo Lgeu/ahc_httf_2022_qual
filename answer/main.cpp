@@ -1147,6 +1147,8 @@ constexpr auto DEBUG_STATS = false; // ここは固定
 constexpr auto DEBUG_STATS = true;
 #endif
 
+constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
+
 namespace input {
 constexpr auto N = 1000;             // タスク数
 constexpr auto M = 20;               // 人数
@@ -1165,15 +1167,18 @@ struct CompletedTask {
     int t;    // かかった時間
 };
 auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
-enum class TaskStatus { NotStarted, InProgress, Completed };
-auto task_status = array<TaskStatus, input::N>(); // タスクの状態
+enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
+auto task_status = array<TaskStatus, input::N>(); // タスクの状態。open かどうかは関係ないことに注意
 auto member_status = array<int, input::M>();      // -1: 空き, それ以外: 今やってるタスク
 auto starting_times = array<int, input::M>();     // メンバーがタスクを始めた時刻
-auto in_dims = array<int, input::N>();            // 入次数、0 になったら自由に実行できる
-auto open_tasks = Stack<int, input::N>();         // 自由に実行できるタスク
-auto open_members = Stack<int, input::N>();       // 手の空いたメンバー
-auto rng = Random(3141592);                       // 乱数生成器
-auto level = array<double, input::N>();           // 後にどれくらいのタスクがつっかえてるか
+auto in_dims = array<int, input::N>();            // 入次数、0 になったら open (自由に実行できる)
+// auto open_tasks = Stack<int, input::N>();                 // 自由に実行できるタスク
+auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
+auto rng = Random(3141592);                               // 乱数生成器
+auto level = array<double, input::N>();                   // 後にどれくらいのタスクがつっかえてるか
+auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク  TODO: 更新
+auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
+auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
 
 } // namespace common
 
@@ -1203,7 +1208,7 @@ constexpr auto initial_expected_skill =
 auto task_weights = array<double, input::N>();                      // タスクの重み: そのタスクに平均的にかかる時間
 auto expected_time = array<array<double, input::M>, input::N>();    // 期待所要時間
 auto expected_skill = array<array<double, 20>, input::M>();         // 各メンバーの能力の予測値
-auto expected_squared_skill = array<array<double, 20>, input::M>(); // 各メンバーの能力の 2 乗の予測値
+auto expected_squared_skill = array<array<double, 20>, input::M>(); // 各メンバーの能力の 2 乗の予測値  TODO: 初期化
 inline void PrintExpectedSkill(const int& member) {
 #ifdef VISUALIZE
     cout << "#s " << member + 1;
@@ -1392,9 +1397,6 @@ void Initialize() {
 
 inline void Update(const int& member) {
     // タスク-メンバー の時間を予測
-    const auto& task_queue = common::open_tasks; // TODO: 仮なので直す
-
-    // メトロポリス・ヘイスティング
     auto& state = mh::state[member];
     constexpr auto MCMC_N_SAMPLING = 10000;
     rep(iteration, MCMC_N_SAMPLING) {
@@ -1408,17 +1410,10 @@ inline void Update(const int& member) {
             expected_squared_skill[member][skill] += EXPECTED_SKILL_EMA_ALPHA * (sampled_skill_value * sampled_skill_value);
         }
     }
-
-    // TODO
-    // 各タスクの予測
-    // for (const auto& task : task_queue) {
-    //     expected_time[task][member] = hogehoge
-    // }
 }
 } // namespace prediction
 
 namespace minimization {
-constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
 constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
 constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
@@ -1427,12 +1422,45 @@ constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_
 
 // ========================== main loop ==========================
 
-void GreedySolution() {
+inline void UpdateQueue() {
+    // task_queue を更新する
+
+    // 1. queue に task を追加する
+    {
+        int task = common::next_important_task[input::N];
+        int last_task = input::N;
+        while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
+            if (common::in_dims[task] != 0 && common::n_not_open_tasks_in_queue > 60) { // open でないタスクをキューに入れるのは 60 個とかに抑える
+                last_task = task;
+                task = common::next_important_task[task];
+                continue;
+            }
+            common::task_queue.push(task);
+            common::task_status[task] = common::TaskStatus::InQueue;
+            if (common::in_dims[task] != 0)
+                common::n_not_open_tasks_in_queue++;
+            task = common::next_important_task[task];
+            common::next_important_task[last_task] = task;
+        }
+    }
+
+    // 2. queue 内の各タスクについて、かかる時間の予測を行う
+    {
+        // TODO
+        for (const auto& task : common::task_queue) {
+            rep(member, input::M) {
+                prediction::expected_time[task][member] = 0.0;
+                // TODO
+            }
+        }
+    }
+
+    // 3. task の割当を行う
+}
+
+inline void GreedySolution() {
     using namespace common;
     fill(member_status.begin(), member_status.end(), -1);
-    for (const auto& e : input::edges) {
-        in_dims[e.to]++;
-    }
     rep(task, input::N) {
         if (in_dims[task] == 0) {
             open_tasks.push(task);
@@ -1491,6 +1519,9 @@ void GreedySolution() {
                 in_dims[u]--;
                 if (in_dims[u] == 0) {
                     open_tasks.push(u);
+                    if (task_status[u] == TaskStatus::InQueue) {
+                        n_not_open_tasks_in_queue--;
+                    }
                 }
             }
             open_members.push(member);
@@ -1547,6 +1578,41 @@ void Solve() {
         for (int i = input::R - 1; i >= 0; i--) {
             const auto& edge = input::edges[i];
             chmax(common::level[edge.from], common::level[edge.to] + prediction::initial_expected_time[edge.to]);
+        }
+
+        // 入次数の初期化
+        for (const auto& e : input::edges) {
+            common::in_dims[e.to]++;
+        }
+
+        // next_important_task と task_queue の初期化
+        {
+            static auto order = array<int, input::N>();
+            iota(order.begin(), order.end(), 0);
+            sort(order.begin(), order.end(), [&](const int& l, const int& r) {
+                if (common::level[l] != common::level[r])
+                    return common::level[l] > common::level[r];
+                return l < r;
+            });
+            common::next_important_task[input::N] = order[0];
+            rep(i, input::N - 1) { common::next_important_task[order[i]] = order[i + 1]; }
+            common::next_important_task[order[input::N - 1]] = input::N;
+
+            int task = common::next_important_task[input::N];
+            int last_task = input::N;
+            while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
+                if (common::in_dims[task] != 0 && common::n_not_open_tasks_in_queue > 60) { // open でないタスクをキューに入れるのは 60 個とかに抑える
+                    last_task = task;
+                    task = common::next_important_task[task];
+                    continue;
+                }
+                common::task_queue.push(task);
+                common::task_status[task] = common::TaskStatus::InQueue;
+                if (common::in_dims[task] != 0)
+                    common::n_not_open_tasks_in_queue++;
+                task = common::next_important_task[task];
+                common::next_important_task[last_task] = task;
+            }
         }
     }
 

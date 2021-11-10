@@ -1161,6 +1161,7 @@ constexpr auto DEBUG_STATS = true;
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 0.0001;
 constexpr auto MCMC_N_SAMPLING = 10000;
+constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 
 namespace input {
 constexpr auto N = 1000;             // タスク数
@@ -1193,6 +1194,7 @@ auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなし�
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
 auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
 auto day = 1;                                             // 現在の日付
+auto n_completed_tasks = 0;                               // 完了したタスク数
 
 struct SchedulingInfo {
     int member;
@@ -1600,37 +1602,52 @@ inline void UpdateQueue() {
     }
 }
 
-inline void GreedySolution() {
+inline void SolveLoop() {
     using namespace common;
     fill(member_status.begin(), member_status.end(), -1);
-    rep(task, input::N) {
-        if (in_dims[task] == 0) {
-            open_tasks.push(task);
-        }
-    }
+
     rep(member, input::M) { open_members.push(member); }
 
     // 1 日目
     {
-        const auto m = min(20, open_tasks.size());
+        auto chosen_task_idxs = Stack<int, input::M>();
+        rep(i, task_queue.size()) {
+            if (in_dims[task_queue[i]] != 0)
+                continue;
+            chosen_task_idxs.push(i);
+            if (chosen_task_idxs.size() == input::M)
+                break;
+        }
+        const auto m = chosen_task_idxs.size();
         cout << m;
-        rep(i, m) {
+        for (const auto& idx : chosen_task_idxs) {
             // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
-            const auto task = open_tasks[0];
-            swap(open_tasks[0], open_tasks.back());
-            open_tasks.pop();
+            const auto task = task_queue[idx];
+            // swap(open_tasks[0], open_tasks.back());
+            // open_tasks.pop();
 
-            const auto member = open_members[0];
-            swap(open_members[0], open_members.back());
+            const auto member = open_members.back();
             open_members.pop();
 
             member_status[member] = task;
             starting_times[member] = 1;
             expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
+            task_queue[idx] = -1;
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
+        // 詰める
+        int right = 0;
+        rep(i, task_queue.size() - m) {
+            while (task_queue[right] != -1) {
+                right++;
+            }
+            task_queue[i] = task_queue[right];
+            right++;
+        }
+        ASSERT(right == task_queue.size(), "算数がおかしい");
+        task_queue.resize(task_queue.size() - m);
     }
 
     // 2 日目以降
@@ -1641,10 +1658,15 @@ inline void GreedySolution() {
     for (day = 2;; day++) {
         int n;
         cin >> n;
-        if (n == -1)
+        if (n == -1) {
             return;
+        } else if (n == 0) {
+            cout << 0 << endl;
+            continue;
+        }
         // cerr << "n=" << n << endl;
 
+        auto queue_update_flag = false;
         rep(i, n) {
             // 完了 ... member_status, task_status in_dims の更新, open_tasks, open_members の追加
             int member;
@@ -1661,7 +1683,6 @@ inline void GreedySolution() {
                 // cerr << "u=" << u << endl;
                 in_dims[u]--;
                 if (in_dims[u] == 0) {
-                    open_tasks.push(u);
                     if (task_status[u] == TaskStatus::InQueue) {
                         n_not_open_tasks_in_queue--;
                     }
@@ -1670,21 +1691,62 @@ inline void GreedySolution() {
             open_members.push(member);
             prediction::Update(member);
             prediction::PrintExpectedSkill(member);
+            n_completed_tasks++;
+            if (n_completed_tasks % QUEUE_UPDATE_FREQUENCY == 0) {
+                queue_update_flag = true;
+            }
         }
 
-        // 着手
-        int m = min(open_tasks.size(), open_members.size());
-        // cerr << "m=" << m << endl;
-        cout << m;
-        rep(i, m) {
-            // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
-            const auto task = open_tasks[0];
-            swap(open_tasks[0], open_tasks.back());
-            open_tasks.pop();
+        // タスクキューの更新
+        if (queue_update_flag)
+            UpdateQueue();
 
-            const auto member = open_members[0];
-            swap(open_members[0], open_members.back());
-            open_members.pop();
+        // 着手
+        struct TaskMember {
+            int task, member;
+        };
+        static auto chosen = Stack<TaskMember, 20>();
+        chosen.clear();
+        for (const auto& member : open_members) {
+            auto best_task = -1;
+            auto best_task_priority = 0.0;
+            for (const auto& task : task_queue) {
+                if (in_dims[task] != 0)
+                    continue;
+                if (best_task == -1) {
+                    best_task = task;
+                    continue;
+                }
+                const auto& info = scheduling_info[task];
+                auto priority = info.member == member ? info.ratio : 0.0;
+                priority *= 1.0 + max(0.0, day - 900 + level[task]) * 0.02;
+                if (best_task_priority != priority) {
+                    if (best_task_priority < priority) {
+                        best_task_priority = priority;
+                        best_task = task;
+                    }
+                } else if (level[task] != level[best_task]) {
+                    if (level[best_task] < level[task]) {
+                        best_task = task;
+                    }
+                } else {
+                    if (prediction::task_weights[best_task] < prediction::task_weights[task]) {
+                        best_task = task;
+                    }
+                }
+            }
+            if (best_task != -1) {
+                chosen.push({best_task, member});
+                task_queue.remove(best_task); // メンバーは後で取り除く
+            }
+        }
+        int m = chosen.size();
+        cout << m;
+        for (const auto& task_member : chosen) {
+            // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
+            const auto& task = task_member.task;
+            const auto member = task_member.member;
+            open_members.remove(member);
 
             member_status[member] = task;
             starting_times[member] = day;
@@ -1760,7 +1822,7 @@ void Solve() {
         }
     }
 
-    GreedySolution();
+    SolveLoop();
 }
 
 int main() {

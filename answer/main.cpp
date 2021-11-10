@@ -1500,14 +1500,14 @@ inline void UpdateQueue() {
                 hist.Normalize();
 
                 if constexpr (DEBUG_STATS) {
-                    cout << "# skill_histograms[" << member << "][" << skill << "]=";
-                    auto sum_hist = 0.0;
-                    for (const auto& h : hist.data) {
-                        cout << h << " ";
-                        sum_hist += h;
-                    }
-                    cout << endl;
-                    cout << "# sum_hist=" << sum_hist << endl;
+                    // cout << "# skill_histograms[" << member << "][" << skill << "]=";
+                    // auto sum_hist = 0.0;
+                    // for (const auto& h : hist.data) {
+                    //     cout << h << " ";
+                    //     sum_hist += h;
+                    // }
+                    // cout << endl;
+                    // cout << "# sum_hist=" << sum_hist << endl;
                 }
 
                 auto df = 0.0;
@@ -1527,7 +1527,7 @@ inline void UpdateQueue() {
                 prediction::expected_time[task][member] =
                     max(1.0, prediction::expected_time[task][member]); // これはまあ正確ではない (そんなこと言ったら色んな場所が正確でゎない…)
                 if constexpr (DEBUG_STATS) {
-                    cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member] << endl;
+                    // cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member] << endl;
                 }
             }
         }
@@ -1546,7 +1546,7 @@ inline void UpdateQueue() {
         // 制約の設定
         const auto objective_variable = n_minimization_tasks * input::M;
         const auto one_variable = objective_variable + 1;
-        const auto objective_offset = 2000.0; // 最後目的変数の値に足すと終了見込み日になる
+        const auto objective_offset = 2000.0; // この値から目的変数を引くと終了見込み日になる
         auto GetVariable = [&](const int& member, const int& idx_task_queue) { return n_minimization_tasks * member + idx_task_queue; };
         rep(member, input::M) {
             rep(idx_task_queue, n_minimization_tasks) {
@@ -1557,7 +1557,7 @@ inline void UpdateQueue() {
                 lp.A_components.push({input::M + idx_task_queue, GetVariable(member, idx_task_queue), -1.0});
             }
             // (1)
-            lp.A_components.push({member, objective_variable, -1.0});
+            lp.A_components.push({member, objective_variable, 1.0});
             lp.b[member] =
                 objective_offset -
                 (common::member_status[member] == -1
@@ -1574,7 +1574,7 @@ inline void UpdateQueue() {
         lp.b[input::M + n_minimization_tasks] = 1.0;
 
         // 目的関数の設定
-        lp.c[objective_variable] = -1.0;
+        lp.c[objective_variable] = 1.0;
         lp.c[one_variable] = 10000.0;
 
         // 解く
@@ -1602,6 +1602,35 @@ inline void UpdateQueue() {
             }
             best_value /= sum_row; // 誤差対策で標準化
             common::scheduling_info[task] = {best_member, best_value};
+        }
+        if constexpr (DEBUG_STATS) {
+            cout << "# lp.b:";
+            rep(member, input::M) { cout << " " << lp.b[member]; }
+            cout << endl;
+            // cout << "# lp status: " << (int)lp.status << endl;
+            // cout << "# lp.z: " << lp.z << endl;
+            // cout << "# optimal value: " << objective_offset - lp.x[objective_variable] << endl;
+            // cout << "# one: " << lp.x[one_variable] << endl;
+            cout << "# result:" << endl;
+            rep(member, input::M) {
+                cout << "#  ";
+                double sum = 0.0;
+                rep(idx_task_queue, n_minimization_tasks) {
+                    const auto& task = common::task_queue[idx_task_queue];
+                    sum += prediction::expected_time[task][member] * lp.x[GetVariable(member, idx_task_queue)];
+                    printf(" %3d %3.1f", (int)prediction::expected_time[task][member], lp.x[GetVariable(member, idx_task_queue)]);
+                }
+                printf(" = %6.1f", sum);
+                cout << endl;
+            }
+
+            // cout << "# scheduling_info (task,member,ratio): ";
+            // rep(idx_task_queue, n_minimization_tasks) {
+            //     const auto& task = common::task_queue[idx_task_queue];
+            //     const auto& info = common::scheduling_info[task];
+            //     cout << "(" << task << "," << info.member << "," << info.ratio << "),";
+            // }
+            // cout << endl;
         }
     }
 }

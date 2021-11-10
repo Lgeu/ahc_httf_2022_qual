@@ -1183,7 +1183,7 @@ auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
 auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
 auto member_status = array<int, input::M>();              // -1: 空き, それ以外: 今やってるタスク
-auto expected_complete_date = array<int, input::M>();     // 終了予定時刻  TODO: 更新
+auto expected_complete_dates = array<double, input::M>(); // 終了予定時刻
 auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
 auto in_dims = array<int, input::N>();                    // 入次数、0 になったら open (自由に実行できる)
 auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
@@ -1192,6 +1192,14 @@ auto level = array<double, input::N>();                   // 後にどれくら�
 auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
 auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
+auto day = 1;                                             // 現在の日付
+
+struct SchedulingInfo {
+    int member;
+    double ratio;
+};
+
+auto scheduling_info = array<SchedulingInfo, input::N>(); // シンプレックス法の結果
 
 } // namespace common
 
@@ -1523,8 +1531,6 @@ inline void UpdateQueue() {
 
     // 3. task の割当を行う
     {
-        // TODO
-        // オフセットを忘れない！！！！
         constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
         constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
         constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
@@ -1536,6 +1542,7 @@ inline void UpdateQueue() {
         // 制約の設定
         const auto objective_variable = n_minimization_tasks * input::M;
         const auto one_variable = objective_variable + 1;
+        const auto objective_offset = 2000.0; // 最後目的変数の値に足すと終了見込み日になる
         auto GetVariable = [&](const int& member, const int& idx_task_queue) { return n_minimization_tasks * member + idx_task_queue; };
         rep(member, input::M) {
             rep(idx_task_queue, n_minimization_tasks) {
@@ -1547,12 +1554,16 @@ inline void UpdateQueue() {
             }
             // (1)
             lp.A_components.push({member, objective_variable, -1.0});
-            lp.b[member] = 0.0;
+            lp.b[member] =
+                objective_offset -
+                (common::member_status[member] == -1
+                     ? (double)common::day
+                     : max(common::day + 1.0, common::expected_complete_dates
+                                                  [member])); // これも本当は現在までタスクが終わってないことを利用して事後分布から期待値が計算できる…
         }
         rep(idx_task_queue, n_minimization_tasks) {
             // (2)
             lp.A_components.push({input::M + idx_task_queue, one_variable, 1.0});
-            lp.b[input::M + idx_task_queue] = 0.0;
         }
         // (3) 定数 1
         lp.A_components.push({input::M + n_minimization_tasks, one_variable, 1.0});
@@ -1562,7 +1573,30 @@ inline void UpdateQueue() {
         lp.c[objective_variable] = -1.0;
         lp.c[one_variable] = 10000.0;
 
+        // 解く
         simplex::Solve(lp);
+
+        // 結果を取り出して scheduling_info に格納
+        rep(idx_task_queue, n_minimization_tasks) {
+            const auto& task = common::task_queue[idx_task_queue];
+
+            auto sum_row = 0.0;
+            auto best_member = 0;
+            auto best_value = 0.0;
+            rep(member, input::M) {
+                const auto& x = lp.x[GetVariable(member, idx_task_queue)];
+                sum_row += x;
+                if (chmax(best_value, x))
+                    best_member = member;
+            }
+            if (sum_row == 0.0) {
+                // そんなことはないはずだが…
+                ASSERT(false, "??????");
+                sum_row = 1.0;
+            }
+            best_value /= sum_row; // 誤差対策で標準化
+            common::scheduling_info[task] = {best_member, best_value};
+        }
     }
 }
 
@@ -1592,6 +1626,7 @@ inline void GreedySolution() {
 
             member_status[member] = task;
             starting_times[member] = 1;
+            expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
             cout << " " << member + 1 << " " << task + 1;
         }
@@ -1603,7 +1638,7 @@ inline void GreedySolution() {
         int member, task;
     };
     auto outputs = Stack<Output, 20>();
-    for (int day = 2;; day++) {
+    for (day = 2;; day++) {
         int n;
         cin >> n;
         if (n == -1)
@@ -1653,6 +1688,7 @@ inline void GreedySolution() {
 
             member_status[member] = task;
             starting_times[member] = day;
+            expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
             cout << " " << member + 1 << " " << task + 1;
         }

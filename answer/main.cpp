@@ -580,18 +580,11 @@ template <class T, int max_size> struct Stack {
             data[i] = rhs.data[i];
         }
     }
-    Stack& operator=(const Stack& rhs) {
-        right = rhs.right;
+    template <class Container> Stack& operator=(const Container& rhs) {
+        right = rhs.size();
+        ASSERT(right <= max_size, "Too big container.");
         for (int i = 0; i < right; i++) {
             data[i] = rhs.data[i];
-        }
-        return *this;
-    }
-    Stack& operator=(const vector<T>& rhs) {
-        right = (int)rhs.size();
-        ASSERT(right <= max_size, "too big vector");
-        for (int i = 0; i < right; i++) {
-            data[i] = rhs[i];
         }
         return *this;
     }
@@ -913,8 +906,9 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> struct LPProblem {
     Status status;
     void PrintSolution(ostream& os = cout) {
         for (int i = 0; i < n; i++) {
-            os << x[i] << " \n"[i == n - 1];
+            os << x[i] << (i == n - 1 ? "" : " ");
         }
+        os << endl;
     }
     void Reset(const int& n_, const int& m_) {
         n = n_;
@@ -945,14 +939,14 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
     iota(nonbasic.begin(), nonbasic.end(), 0);
 
     // A のスラック変数の列を単位行列で初期化
-    static auto A_components = Stack<SparseMatrixComponent, MAX_N_COMPONENTS>();
+    static auto A_components = Stack<SparseMatrixComponent, MAX_N_COMPONENTS + MAX_M>();
     A_components = lp.A_components;
     for (int row = 0; row < lp.m; ++row) {
         A_components.push({row, lp.n + row, 1.0});
     }
 
     // A を構築
-    static auto A = CSCMatrix<MAX_N + MAX_M, MAX_N_COMPONENTS>();
+    static auto A = CSCMatrix<MAX_N + MAX_M, MAX_N_COMPONENTS + MAX_M>();
     new (&A) decltype(A)(lp.n + lp.m, A_components);
 
     // b が 0 以上であることを確認
@@ -1512,7 +1506,7 @@ inline void UpdateQueue() {
                 auto& fms = f[member][skill];
                 hist.Normalize();
                 auto df = 0.0;
-                for (int i = 59; i >= 0; i++) { // fms[60] は 0.0 (そもそも 41 以上は使わないが…)
+                for (int i = 59; i >= 0; i--) { // fms[60] は 0.0 (そもそも 41 以上は使わないが…)
                     df += hist.data[i + 1];
                     fms[i] = fms[i + 1] + df;
                 }
@@ -1578,6 +1572,8 @@ inline void UpdateQueue() {
         // 解く
         simplex::Solve(lp);
 
+        // lp.PrintSolution(cerr);
+
         // 結果を取り出して scheduling_info に格納
         rep(idx_task_queue, n_minimization_tasks) {
             const auto& task = common::task_queue[idx_task_queue];
@@ -1637,15 +1633,16 @@ inline void SolveLoop() {
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
-        // 詰める
+
         int right = 0;
         rep(i, task_queue.size() - m) {
-            while (task_queue[right] != -1) {
+            while (task_queue[right] == -1) {
                 right++;
             }
             task_queue[i] = task_queue[right];
             right++;
         }
+
         ASSERT(right == task_queue.size(), "算数がおかしい");
         task_queue.resize(task_queue.size() - m);
     }
@@ -1654,17 +1651,16 @@ inline void SolveLoop() {
     struct Output {
         int member, task;
     };
-    auto outputs = Stack<Output, 20>();
     for (day = 2;; day++) {
         int n;
         cin >> n;
+        cout << "# day=" << day << " n=" << n << endl;
         if (n == -1) {
             return;
         } else if (n == 0) {
             cout << 0 << endl;
             continue;
-        }
-        // cerr << "n=" << n << endl;
+        };
 
         auto queue_update_flag = false;
         rep(i, n) {
@@ -1696,6 +1692,7 @@ inline void SolveLoop() {
                 queue_update_flag = true;
             }
         }
+        cout << "# n_completed_tasks=" << n_completed_tasks << endl;
 
         // タスクキューの更新
         if (queue_update_flag)
@@ -1783,7 +1780,13 @@ void Solve() {
         sort(input::edges.begin(), input::edges.end());
         for (int i = input::R - 1; i >= 0; i--) {
             const auto& edge = input::edges[i];
-            chmax(common::level[edge.from], common::level[edge.to] + prediction::initial_expected_time[edge.to]);
+            chmax(common::level[edge.from], common::level[edge.to] + prediction::task_weights[edge.to]);
+        }
+        if constexpr (DEBUG_STATS) {
+            cout << "# level:";
+            for (const auto& l : common::level)
+                cout << " " << l;
+            cout << endl;
         }
 
         // 入次数の初期化

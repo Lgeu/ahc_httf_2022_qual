@@ -112,90 +112,6 @@ template <class T, class S> inline bool chmax(T& m, const S q) {
         return false;
 }
 
-// クリッピング  // clamp (C++17) と等価
-template <class T> inline T clipped(const T& v, const T& low, const T& high) { return min(max(v, low), high); }
-
-// 2 次元ベクトル
-template <typename T> struct Vec2 {
-    /*
-    y 軸正は下方向
-    x 軸正は右方向
-    回転は時計回りが正（y 軸正を上と考えると反時計回りになる）
-    */
-    T y, x;
-    constexpr inline Vec2() = default;
-    constexpr Vec2(const T& arg_y, const T& arg_x) : y(arg_y), x(arg_x) {}
-    inline Vec2(const Vec2&) = default;            // コピー
-    inline Vec2(Vec2&&) = default;                 // ムーブ
-    inline Vec2& operator=(const Vec2&) = default; // 代入
-    inline Vec2& operator=(Vec2&&) = default;      // ムーブ代入
-    template <typename S> constexpr inline Vec2(const Vec2<S>& v) : y((T)v.y), x((T)v.x) {}
-    inline Vec2 operator+(const Vec2& rhs) const { return Vec2(y + rhs.y, x + rhs.x); }
-    inline Vec2 operator+(const T& rhs) const { return Vec2(y + rhs, x + rhs); }
-    inline Vec2 operator-(const Vec2& rhs) const { return Vec2(y - rhs.y, x - rhs.x); }
-    template <typename S> inline Vec2 operator*(const S& rhs) const { return Vec2(y * rhs, x * rhs); }
-    inline Vec2 operator*(const Vec2& rhs) const { // x + yj とみなす
-        return Vec2(x * rhs.y + y * rhs.x, x * rhs.x - y * rhs.y);
-    }
-    template <typename S> inline Vec2 operator/(const S& rhs) const {
-        ASSERT(rhs != 0.0, "Zero division!");
-        return Vec2(y / rhs, x / rhs);
-    }
-    inline Vec2 operator/(const Vec2& rhs) const { // x + yj とみなす
-        return (*this) * rhs.inv();
-    }
-    inline Vec2& operator+=(const Vec2& rhs) {
-        y += rhs.y;
-        x += rhs.x;
-        return *this;
-    }
-    inline Vec2& operator-=(const Vec2& rhs) {
-        y -= rhs.y;
-        x -= rhs.x;
-        return *this;
-    }
-    template <typename S> inline Vec2& operator*=(const S& rhs) const {
-        y *= rhs;
-        x *= rhs;
-        return *this;
-    }
-    inline Vec2& operator*=(const Vec2& rhs) {
-        *this = (*this) * rhs;
-        return *this;
-    }
-    inline Vec2& operator/=(const Vec2& rhs) {
-        *this = (*this) / rhs;
-        return *this;
-    }
-    inline bool operator!=(const Vec2& rhs) const { return x != rhs.x || y != rhs.y; }
-    inline bool operator==(const Vec2& rhs) const { return x == rhs.x && y == rhs.y; }
-    inline void rotate(const double& rad) { *this = rotated(rad); }
-    inline Vec2<double> rotated(const double& rad) const { return (*this) * rotation(rad); }
-    static inline Vec2<double> rotation(const double& rad) { return Vec2(sin(rad), cos(rad)); }
-    static inline Vec2<double> rotation_deg(const double& deg) { return rotation(PI * deg / 180.0); }
-    inline Vec2<double> rounded() const { return Vec2<double>(round(y), round(x)); }
-    inline Vec2<double> inv() const { // x + yj とみなす
-        const double norm_sq = l2_norm_square();
-        ASSERT(norm_sq != 0.0, "Zero division!");
-        return Vec2(-y / norm_sq, x / norm_sq);
-    }
-    inline double l2_norm() const { return sqrt(x * x + y * y); }
-    inline double l2_norm_square() const { return x * x + y * y; }
-    inline T l1_norm() const { return std::abs(x) + std::abs(y); }
-    inline double abs() const { return l2_norm(); }
-    inline double phase() const { // [-PI, PI) のはず
-        return atan2(y, x);
-    }
-    inline double phase_deg() const { // [-180, 180) のはず
-        return phase() / PI * 180.0;
-    }
-};
-template <typename T, typename S> inline Vec2<T> operator*(const S& lhs, const Vec2<T>& rhs) { return rhs * lhs; }
-template <typename T> ostream& operator<<(ostream& os, const Vec2<T>& vec) {
-    os << vec.y << ' ' << vec.x;
-    return os;
-}
-
 // 乱数
 struct Random {
     using ull = unsigned long long;
@@ -213,50 +129,6 @@ struct Random {
     inline int randint(const int& right) { return (ull)next() * right >> 32; }
     // [left, right)
     inline int randint(const int& left, const int& right) { return ((ull)next() * (right - left) >> 32) + left; }
-};
-
-// 2 次元配列
-template <class T, int height, int width> struct Board {
-    array<T, height * width> data;
-    template <class Int> constexpr inline auto& operator[](const Vec2<Int>& p) { return data[width * p.y + p.x]; }
-    template <class Int> constexpr inline const auto& operator[](const Vec2<Int>& p) const { return data[width * p.y + p.x]; }
-    template <class Int> constexpr inline auto& operator[](const initializer_list<Int>& p) { return data[width * *p.begin() + *(p.begin() + 1)]; }
-    template <class Int> constexpr inline const auto& operator[](const initializer_list<Int>& p) const {
-        return data[width * *p.begin() + *(p.begin() + 1)];
-    }
-    constexpr inline void Fill(const T& fill_value) { fill(data.begin(), data.end(), fill_value); }
-    void Print() const {
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                cout << data[width * y + x] << " \n"[x == width - 1];
-            }
-        }
-    }
-};
-
-// キュー
-template <class T, int max_size> struct Queue {
-    array<T, max_size> data;
-    int left, right;
-    inline Queue() : data(), left(0), right(0) {}
-    inline Queue(initializer_list<T> init) : data(init.begin(), init.end()), left(0), right(init.size()) {}
-
-    inline bool empty() const { return left == right; }
-    inline void push(const T& value) {
-        data[right] = value;
-        right++;
-    }
-    inline void pop() { left++; }
-    const inline T& front() const { return data[left]; }
-    template <class... Args> inline void emplace(const Args&... args) {
-        data[right] = T(args...);
-        right++;
-    }
-    inline void clear() {
-        left = 0;
-        right = 0;
-    }
-    inline int size() const { return right - left; }
 };
 
 // スタック  // コンストラクタ呼ぶタイミングとかが考えられてなくて良くない
@@ -423,73 +295,6 @@ inline double time() {
     return static_cast<double>(chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now().time_since_epoch()).count()) * 1e-9;
 }
 
-// 重複除去
-template <typename T> inline void deduplicate(vector<T>& vec) {
-    sort(vec.begin(), vec.end());
-    vec.erase(unique(vec.begin(), vec.end()), vec.end());
-}
-
-// 2 分法
-template <typename T> inline int search_sorted(const vector<T>& vec, const T& a) { return lower_bound(vec.begin(), vec.end(), a) - vec.begin(); }
-
-// argsort
-template <typename T, int n, typename result_type, bool reverse = false> inline auto Argsort(const array<T, n>& vec) {
-    array<result_type, n> res;
-    iota(res.begin(), res.end(), 0);
-    sort(res.begin(), res.end(), [&](const result_type& l, const result_type& r) { return reverse ? vec[l] > vec[r] : vec[l] < vec[r]; });
-    return res;
-}
-
-// popcount  // SSE 4.2 を使うべき
-inline int popcount(const unsigned int& x) {
-#ifdef _MSC_VER
-    return (int)__popcnt(x);
-#else
-    return __builtin_popcount(x);
-#endif
-}
-inline int popcount(const unsigned long long& x) {
-#ifdef _MSC_VER
-    return (int)__popcnt64(x);
-#else
-    return __builtin_popcountll(x);
-#endif
-}
-
-// x >> n & 1 が 1 になる最小の n ( x==0 は未定義 )
-inline int CountRightZero(const unsigned int& x) {
-#ifdef _MSC_VER
-    unsigned long r;
-    _BitScanForward(&r, x);
-    return (int)r;
-#else
-    return __builtin_ctz(x);
-#endif
-}
-inline int CountRightZero(const unsigned long long& x) {
-#ifdef _MSC_VER
-    unsigned long r;
-    _BitScanForward64(&r, x);
-    return (int)r;
-#else
-    return __builtin_ctzll(x);
-#endif
-}
-
-inline double MonotonicallyIncreasingFunction(const double& h, const double& x) {
-    // 0 < h < 1
-    // f(0) = 0, f(1) = 1, f(0.5) = h
-    ASSERT(h > 0.0 && h < 1.0, "0 < h < 1 not satisfied");
-    if (h == 0.5)
-        return x;
-    const double& a = (1.0 - 2.0 * h) / (h * h);
-    return expm1(log1p(a) * x) / a;
-}
-inline double MonotonicFunction(const double& start, const double& end, const double& h, const double& x) {
-    // h: x = 0.5 での進捗率
-    return MonotonicallyIncreasingFunction(h, x) * (end - start) + start;
-}
-
 template <typename T> struct Slice {
     T *left, *right;
     inline Slice(T* const& l, T* const& r) : left(l), right(r) {}
@@ -497,6 +302,9 @@ template <typename T> struct Slice {
     inline const T* begin() const { return (const T*)left; }
     inline T* end() { return right; }
     inline const T* end() const { return (const T*)right; }
+    inline int size() const { return distance(left, right); }
+    inline T& operator[](const int& idx) { return left[idx]; }
+    inline const T& operator[](const int& idx) const { return left[idx]; }
 };
 
 struct Edge {
@@ -532,18 +340,6 @@ template <int max_n, int max_m> struct Graph {
 };
 
 namespace simplex {
-
-template <typename T> struct Slice {
-    T *left, *right;
-    inline Slice(T* const& l, T* const& r) : left(l), right(r) {}
-    inline T* begin() { return left; }
-    inline const T* begin() const { return (const T*)left; }
-    inline T* end() { return right; }
-    inline const T* end() const { return (const T*)right; }
-    inline int size() const { return distance(left, right); }
-    inline T& operator[](const int& idx) { return left[idx]; }
-    inline const T& operator[](const int& idx) const { return left[idx]; }
-};
 
 struct SparseMatrixComponent {
     int row, col;

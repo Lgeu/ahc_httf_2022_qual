@@ -1154,7 +1154,7 @@ constexpr auto DEBUG_STATS = true;
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 1e-5;
-constexpr auto MCMC_N_SAMPLING = 5000;
+constexpr auto MCMC_N_SAMPLING = 1000;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 
 namespace input {
@@ -1174,7 +1174,7 @@ struct CompletedTask {
     int task; // タスク番号
     int t;    // かかった時間
 };
-auto completed_tasks = array<Stack<CompletedTask, 200>, input::M>();
+auto completed_tasks = array<Stack<CompletedTask, 400>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
 auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
 auto member_status = array<int, input::M>();              // -1: 空き, それ以外: 今やってるタスク
@@ -1276,8 +1276,8 @@ struct State {
     array<double, 20> skills_base; // パラメータ, 事前分布は正規分布
     // array<double, 20> log_prior_probabilities; // 各パラメータの事前確率の対数 = -skills_base * skills_base / 2
     // double sum_log_prior_probabilities;  // 事前確率の対数  -sum_square_skills_base / 2
-    array<array<double, 20>, 200> ramps; // 各タスク各技能のランプ関数をとった値
-    array<double, 200> sum_ramps;        // 各タスクの期待完了時間
+    array<array<double, 20>, 400> ramps; // 各タスク各技能のランプ関数をとった値
+    array<double, 400> sum_ramps;        // 各タスクの期待完了時間
     double log_likelihood;               // 対数尤度: sum(sum_ramps^2/6)
     double sum_square_skills_base;       // 2 乗和  sum(skill_base^2)
     double root_sum_square_skills_base;  // 2 乗和の平方根 (分母)
@@ -1332,8 +1332,8 @@ struct State {
             const auto tmp = l2_norm + delta;
             const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
             const auto new_scale = new_l2_norm / root_sum_square_skills_base;
-            static auto new_ramps = array<array<double, 20>, 200>();
-            static auto new_sum_ramps = array<double, 200>();
+            static auto new_ramps = array<array<double, 20>, 400>();
+            static auto new_sum_ramps = array<double, 400>();
             auto new_log_likelihood = 0.0;
             rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                 const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
@@ -1384,8 +1384,8 @@ struct State {
                 new_l2_norm = scale * new_root_sum_square_skills_base;
             } while (new_l2_norm < 20.0 || new_l2_norm > 60.0);
             const auto s = abs(new_skill_base) * scale;
-            static auto new_ramps = array<double, 200>();     // common::completed_tasks[member].size() まで使う
-            static auto new_sum_ramps = array<double, 200>(); // common::completed_tasks[member].size() まで使う
+            static auto new_ramps = array<double, 400>();     // common::completed_tasks[member].size() まで使う
+            static auto new_sum_ramps = array<double, 400>(); // common::completed_tasks[member].size() まで使う
             auto new_log_likelihood = 0.0;
             // auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
             rep(idx_completed_tasks, common::completed_tasks[member].size()) {
@@ -1711,15 +1711,12 @@ inline void SolveLoop() {
             int member;
             cin >> member;
             member--;
-            // cerr << "member=" << member << endl;
             auto task = member_status[member];
             member_status[member] = -1;
             task_status[task] = TaskStatus::Completed;
             completed_tasks[member].push({task, day - starting_times[member]});
             prediction::mh::state[member].AddCompletedTask();
-            // cerr << "task=" << task << endl;
             for (const auto& u : input::G[task]) {
-                // cerr << "u=" << u << endl;
                 in_dims[u]--;
                 if (in_dims[u] == 0) {
                     if (task_status[u] == TaskStatus::InQueue) {

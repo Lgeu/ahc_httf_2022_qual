@@ -685,11 +685,11 @@ constexpr auto DEBUG_STATS = false; // ここは固定
 constexpr auto DEBUG_STATS = true;
 #endif
 
-constexpr auto MAX_N_MINIMIZATION_TASKS = 60;
+constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-3;
 constexpr auto MCMC_N_SAMPLING = 2000;
-constexpr auto QUEUE_UPDATE_FREQUENCY = 10;
-constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 40;
+constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
+constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 60;
 
 namespace input {
 constexpr auto N = 1000;                                   // タスク数
@@ -1058,8 +1058,14 @@ inline void CalcDepth() {
 }
 
 inline void Match() {
-    int n = input::M + semi_open_jobs.size() + 2;
-    auto mcf = atcoder::mcf_graph<int, int>();
+    // semi_open_tasks から優先度上位 20 を取り出す
+
+    // int n = input::M + semi_open_jobs.size() + 2;
+    // auto mcf = atcoder::mcf_graph<int, int>();
+
+    // コストは着手開始までの待ち時間を含める
+
+    // 結果は [メンバー] := タスク の状態で返す
     // TODO
 }
 
@@ -1360,6 +1366,8 @@ inline void SolveLoop() {
                 if (in_dims[task] != 0)
                     continue;
                 const auto& info = scheduling_info[task];
+                // if (info.member != member)
+                //     continue;
                 auto priority = info.member == member ? info.ratio : 0.0;
                 if (level[task] != 0.0)
                     priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;
@@ -1385,18 +1393,27 @@ inline void SolveLoop() {
                 task_queue.remove(best_task); // メンバーは後で取り除く
             }
         }
+        for (const auto& task_member : chosen)
+            open_members.remove(task_member.member);
+
+        // 良いタスクが見つからなかった人がいれば、マッチング
+        Match();
+
+        // TODO
+
         int m = chosen.size();
         cout << m;
         for (const auto& task_member : chosen) {
             // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
             const auto& task = task_member.task;
-            const auto member = task_member.member;
-            open_members.remove(member);
+            const auto& member = task_member.member;
 
             member_status[member] = task;
             starting_times[member] = day;
             expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
+            // semi_open_tasks.Print(cerr);
+            // cerr << "# task=" << task << endl;
             semi_open_tasks.remove(task);
             for (const auto& u : input::G[task]) {
                 semi_in_dims[u]--;
@@ -1407,6 +1424,8 @@ inline void SolveLoop() {
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
+
+        cout << "#???" << endl;
     }
 }
 void Solve() {
@@ -1450,6 +1469,7 @@ void Solve() {
         // 入次数の初期化
         for (const auto& e : input::edges) {
             common::in_dims[e.to]++;
+            common::semi_in_dims[e.to]++;
         }
 
         // semi_open_tasks の初期化

@@ -1,3 +1,4 @@
+#include <atcoder/mincostflow.hpp>
 #include <immintrin.h>
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
@@ -32,6 +33,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <atcoder/mincostflow>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -340,6 +343,8 @@ template <int max_n, int max_m> struct Graph {
 };
 
 namespace simplex {
+
+// 参考: https://github.com/pakwah/Revised-Simplex-Method
 
 struct SparseMatrixComponent {
     int row, col;
@@ -680,10 +685,11 @@ constexpr auto DEBUG_STATS = false; // ここは固定
 constexpr auto DEBUG_STATS = true;
 #endif
 
-constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
+constexpr auto MAX_N_MINIMIZATION_TASKS = 60;
 constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-3;
 constexpr auto MCMC_N_SAMPLING = 2000;
-constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
+constexpr auto QUEUE_UPDATE_FREQUENCY = 10;
+constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 40;
 
 namespace input {
 constexpr auto N = 1000;                                   // タスク数
@@ -713,8 +719,11 @@ auto expected_complete_dates = array<double, input::M>(); // 終了予定時刻
 auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
 auto in_dims = array<int, input::N>();                    // 入次数、0 になったら open (自由に実行できる)
 auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
+auto semi_open_tasks = Stack<int, input::N>();            // 開いてる / 空く予定のタスク
+auto semi_in_dims = array<int, input::N>();               // 入次数、0 になったら semi-open
 auto rng = Random(3141592653);                            // 乱数生成器
 auto level = array<double, input::N>();                   // 後にどれくらいのタスクがつっかえてるか
+auto depth = array<int, input::N>();                      // 何階層の先行するタスクがあるか
 auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
 auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
@@ -934,7 +943,7 @@ struct State {
             static auto new_ramps = array<double, 400>();     // common::completed_tasks[member].size() まで使う
             static auto new_sum_ramps = array<double, 400>(); // common::completed_tasks[member].size() まで使う
             auto new_log_likelihood = 0.0;
-            auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
+            // auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
             for (int idx_completed_tasks = 0; idx_completed_tasks < common::completed_tasks[member].size() - 1; idx_completed_tasks += 2) {
                 const auto& completed_task_0 = common::completed_tasks[member][idx_completed_tasks];
                 const auto& completed_task_1 = common::completed_tasks[member][idx_completed_tasks + 1];
@@ -1029,15 +1038,44 @@ inline void Update(const int& member) {
 
 // ========================== main loop ==========================
 
+inline void CalcDepth() {
+    using common::depth;
+    using common::in_dims;
+    fill(depth.begin(), depth.end(), 0);
+    cout << "# (v,depth)=";
+    rep(v, input::N) {
+        if (in_dims[v] == 0) {
+            ASSERT(depth[v] == 0, "???????????");
+        }
+        if (common::task_status[v] == common::TaskStatus::Completed)
+            continue;
+        for (const auto& u : input::G[v]) {
+            chmax(depth[u], depth[v] + 1);
+        }
+        cout << "(" << v << "," << depth[v] << "),";
+    }
+    cout << endl;
+}
+
+inline void Match() {
+    int n = input::M + semi_open_jobs.size() + 2;
+    auto mcf = atcoder::mcf_graph<int, int>();
+    // TODO
+}
+
 inline void UpdateQueue() {
     // task_queue を更新する
 
     // 1. queue に task を追加する
     {
+        CalcDepth();
         int task = common::next_important_task[input::N];
         int last_task = input::N;
+        cout << "# all tasks: ";
         while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
-            if (common::in_dims[task] != 0 && common::n_not_open_tasks_in_queue > 60) { // open でないタスクをキューに入れるのは 60 個とかに抑える
+            cout << task << ",";
+            if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
+                common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
                 last_task = task;
                 task = common::next_important_task[task];
                 continue;
@@ -1049,6 +1087,10 @@ inline void UpdateQueue() {
             task = common::next_important_task[task];
             common::next_important_task[last_task] = task;
         }
+        cout << endl;
+        cout << "# task_queue.size()=" << common::task_queue.size() << endl;
+        cout << "# task_queue:";
+        common::task_queue.Print();
     }
 
     // 2. queue 内の各タスクについて、かかる時間の予測を行う
@@ -1102,8 +1144,8 @@ inline void UpdateQueue() {
 
     // 3. task の割当を行う
     {
-        constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 8 * 8 + 8;
-        constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 8 * 8 + 8;
+        constexpr auto MAX_N = (MAX_N_MINIMIZATION_TASKS * input::M + 2 - 1) / 16 * 16 + 16;
+        constexpr auto MAX_M = (MAX_N_MINIMIZATION_TASKS + input::M + 1 - 1) / 16 * 16 + 16;
         constexpr auto MAX_N_COMPONENTS = MAX_N_MINIMIZATION_TASKS * input::M * 2 + MAX_N_MINIMIZATION_TASKS + input::M + 1;
         const auto n_minimization_tasks = common::task_queue.size(); // 最適化するタスクの数
 
@@ -1232,6 +1274,13 @@ inline void SolveLoop() {
             expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
             task_queue[idx] = -1;
+            semi_open_tasks.remove(task);
+            for (const auto& u : input::G[task]) {
+                semi_in_dims[u]--;
+                if (semi_in_dims[u] == 0) {
+                    semi_open_tasks.push(u);
+                }
+            }
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
@@ -1292,6 +1341,7 @@ inline void SolveLoop() {
             }
         }
         cout << "# n_completed_tasks=" << n_completed_tasks << endl;
+        cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
 
         // タスクキューの更新
         if (queue_update_flag)
@@ -1347,6 +1397,13 @@ inline void SolveLoop() {
             starting_times[member] = day;
             expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
+            semi_open_tasks.remove(task);
+            for (const auto& u : input::G[task]) {
+                semi_in_dims[u]--;
+                if (semi_in_dims[u] == 0) {
+                    semi_open_tasks.push(u);
+                }
+            }
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
@@ -1395,6 +1452,13 @@ void Solve() {
             common::in_dims[e.to]++;
         }
 
+        // semi_open_tasks の初期化
+        rep(i, input::N) {
+            if (common::in_dims[i] == 0) {
+                common::semi_open_tasks.push(i);
+            }
+        }
+
         // next_important_task と task_queue の初期化
         {
             static auto order = array<int, input::N>();
@@ -1408,10 +1472,12 @@ void Solve() {
             rep(i, input::N - 1) { common::next_important_task[order[i]] = order[i + 1]; }
             common::next_important_task[order[input::N - 1]] = input::N;
 
+            CalcDepth();
             int task = common::next_important_task[input::N];
             int last_task = input::N;
             while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
-                if (common::in_dims[task] != 0 && common::n_not_open_tasks_in_queue > 60) { // open でないタスクをキューに入れるのは 60 個とかに抑える
+                if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
+                    common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
                     last_task = task;
                     task = common::next_important_task[task];
                     continue;
@@ -1424,6 +1490,11 @@ void Solve() {
                 common::next_important_task[last_task] = task;
             }
         }
+
+        rep(i, input::N) { cout << "# task=" << i << " level=" << common::level[i] << endl; }
+        cout << "# task_queue: ";
+        common::task_queue.Print();
+        cout << "# n_not_open_tasks_in_queue=" << common::n_not_open_tasks_in_queue << endl;
     }
 
     SolveLoop();

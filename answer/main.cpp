@@ -471,7 +471,7 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
     double z = 0.0;                            // 目的関数の初期値
     alignas(64) static array<double, MAX_M> y; // 長さ m
     memset(&pivots, 0, sizeof(pivots));
-    memset(&pivots, 0, sizeof(y));
+    memset(&y, 0, sizeof(y));
 
     // 改訂シンプレックス法
     while (true) {

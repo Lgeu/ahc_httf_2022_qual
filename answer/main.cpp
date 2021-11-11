@@ -1057,16 +1057,55 @@ inline void CalcDepth() {
     cout << endl;
 }
 
-inline void Match() {
+inline Stack<int, input::M> Match() {
     // semi_open_tasks から優先度上位 20 を取り出す
+    static auto task_candidates = Stack<int, input::N>();
+    for (const auto& task : common::semi_open_tasks)
+        task_candidates.push(task);
+    if (task_candidates.size() > input::M) {
+        nth_element(task_candidates.begin(), task_candidates.begin() + input::M, task_candidates.end(), [&](const int& l, const int& r) {
+            using common::level;
+            using prediction::task_weights;
+            return level[l] != level[r] ? level[l] > level[r] : task_weights[l] > task_weights[r];
+        });
+        task_candidates.resize(input::M);
+    }
 
-    // int n = input::M + semi_open_jobs.size() + 2;
-    // auto mcf = atcoder::mcf_graph<int, int>();
+    // 最小費用流
+    const int n = input::M + task_candidates.size() + 2;
+    auto mcf = atcoder::mcf_graph<int, int>(n);
+    const auto source = n - 2;
+    const auto sink = n - 1;
+    const auto task_node_offset = input::M;
 
     // コストは着手開始までの待ち時間を含める
+    rep(member, input::M) {
+        rep(idx_task, task_candidates.size()) {
+            const auto& task = task_candidates[idx_task];
+            mcf.add_edge(member, task_node_offset + idx_task, 1,
+                         (int)round(prediction::expected_time[task][member] + max(1.0, common::expected_complete_dates[member] - common::day)));
+        }
+    }
+    rep(member, input::M) { mcf.add_edge(source, member, 1, 0); }
+    rep(idx_task, task_candidates.size()) { mcf.add_edge(task_node_offset + idx_task, sink, 1, 0); }
+
+    // 流す
+    mcf.flow(source, sink);
 
     // 結果は [メンバー] := タスク の状態で返す
-    // TODO
+    // タスクが割り当てられなければ -1
+    auto res = Stack<int, input::M>();
+    res.resize(task_candidates.size());
+    fill(res.begin(), res.end(), -1);
+
+    rep(member, input::M) {
+        rep(idx_task, task_candidates.size()) {
+            if (mcf.get_edge(member * task_candidates.size() + idx_task).flow) {
+                res[member] = task_candidates[idx_task];
+            }
+        }
+    }
+    return res;
 }
 
 inline void UpdateQueue() {
@@ -1366,8 +1405,8 @@ inline void SolveLoop() {
                 if (in_dims[task] != 0)
                     continue;
                 const auto& info = scheduling_info[task];
-                // if (info.member != member)
-                //     continue;
+                if (info.member != member)
+                    continue;
                 auto priority = info.member == member ? info.ratio : 0.0;
                 if (level[task] != 0.0)
                     priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;

@@ -615,7 +615,7 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
                 // cout << "# leaving_label=" << leaving_label << " cnbars[entering_variable_index].label=" << cnbars[entering_variable_index].label
                 //      << endl;
                 // ソートして何番目のが採用された？
-                cout << "# " << entering_variable_index << "/" << cnbars_size << endl;
+                // cout << "# " << entering_variable_index << "/" << cnbars_size << endl;
                 break;
             } else {
                 entering_variable_index++;
@@ -649,7 +649,7 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
         // 目的関数の値を増加させる
         z += entering_variable.value * smallest_t;
         if constexpr (DEBUG_SIMPLEX) {
-            cout << "# iteration=" << pivots_size << " z=" << z << endl;
+            // cout << "# iteration=" << pivots_size << " z=" << z << endl;
         }
         counter++;
 
@@ -682,7 +682,7 @@ constexpr auto DEBUG_STATS = true;
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-3;
-constexpr auto MCMC_N_SAMPLING = 1000;
+constexpr auto MCMC_N_SAMPLING = 2000;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 
 namespace input {
@@ -700,9 +700,11 @@ auto G = Graph<1000, 3000>();
 
 namespace common {
 struct CompletedTask {
-    int task; // タスク番号
-    int t;    // かかった時間
+    double t;            // かかった時間
+    array<double, 20> d; // 入力と同じ
+    int task;            // タスク番号
 };
+
 auto completed_tasks = array<Stack<CompletedTask, 400>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
 auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
@@ -805,7 +807,7 @@ struct State {
     array<double, 20> skills_base; // パラメータ, 事前分布は正規分布
     // array<double, 20> log_prior_probabilities; // 各パラメータの事前確率の対数 = -skills_base * skills_base / 2
     // double sum_log_prior_probabilities;  // 事前確率の対数  -sum_square_skills_base / 2
-    array<array<double, 20>, 400> ramps; // 各タスク各技能のランプ関数をとった値
+    array<array<double, 400>, 20> ramps; // 各技能各タスクのランプ関数をとった値
     array<double, 400> sum_ramps;        // 各タスクの期待完了時間
     double log_likelihood;               // 対数尤度: sum(sum_ramps^2/6)
     double sum_square_skills_base;       // 2 乗和  sum(skill_base^2)
@@ -842,8 +844,8 @@ struct State {
         sum_ramps[idx_completed_tasks] = 0.0;
         rep(skill, input::K) {
             const auto s = abs(skills_base[skill]) * scale;
-            ramps[idx_completed_tasks][skill] = max(0.0, input::d_double[completed_task.task][skill] - s);
-            sum_ramps[idx_completed_tasks] += ramps[idx_completed_tasks][skill];
+            ramps[skill][idx_completed_tasks] = max(0.0, input::d_double[completed_task.task][skill] - s);
+            sum_ramps[idx_completed_tasks] += ramps[skill][idx_completed_tasks];
         }
         const auto w = max(1.0, sum_ramps[idx_completed_tasks]) - completed_task.t;
         log_likelihood += w * w * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0));
@@ -861,20 +863,36 @@ struct State {
             const auto tmp = l2_norm + delta;
             const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
             const auto new_scale = new_l2_norm / root_sum_square_skills_base;
-            static auto new_ramps = array<array<double, 20>, 400>();
+            static auto new_ramps = array<array<double, 400>, 20>();
             static auto new_sum_ramps = array<double, 400>();
             auto new_log_likelihood = 0.0;
+
+            fill(new_sum_ramps.begin(), new_sum_ramps.begin() + common::completed_tasks[member].size(), 0.0);
+            rep(skl, input::K) {
+                const auto s = abs(skills_base[skl]) * new_scale;
+                rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+                    const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
+                    new_ramps[skl][idx_completed_tasks] = max(0.0, completed_task.d[skl] - s);
+                    new_sum_ramps[idx_completed_tasks] += new_ramps[skl][idx_completed_tasks];
+                }
+            }
             rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                 const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
-                new_sum_ramps[idx_completed_tasks] = 0.0;
-                rep(skl, input::K) {
-                    const auto s = abs(skills_base[skl]) * new_scale;
-                    new_ramps[idx_completed_tasks][skl] = max(0.0, input::d_double[completed_task.task][skl] - s);
-                    new_sum_ramps[idx_completed_tasks] += new_ramps[idx_completed_tasks][skl];
-                }
                 const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
                 new_log_likelihood += w * w;
             }
+
+            // rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+            //     const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
+            //     new_sum_ramps[idx_completed_tasks] = 0.0;
+            //     rep(skl, input::K) {
+            //         const auto s = abs(skills_base[skl]) * new_scale;
+            //         new_ramps[idx_completed_tasks][skl] = max(0.0, input::d_double[completed_task.task][skl] - s);
+            //         new_sum_ramps[idx_completed_tasks] += new_ramps[idx_completed_tasks][skl];
+            //     }
+            //     const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
+            //     new_log_likelihood += w * w;
+            // }
             new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
             const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5; // これは変わらない
             const auto new_log_alpha = sum_log_prior_probabilities + new_log_likelihood;
@@ -888,7 +906,7 @@ struct State {
             if (r < p) {
                 // 採択
                 rep(idx_completed_tasks, common::completed_tasks[member].size()) {
-                    rep(skl, input::K) { ramps[idx_completed_tasks][skl] = new_ramps[idx_completed_tasks][skl]; }
+                    rep(skl, input::K) { ramps[skl][idx_completed_tasks] = new_ramps[skl][idx_completed_tasks]; }
                     sum_ramps[idx_completed_tasks] = new_sum_ramps[idx_completed_tasks];
                 }
                 log_likelihood = new_log_likelihood;
@@ -916,12 +934,26 @@ struct State {
             static auto new_ramps = array<double, 400>();     // common::completed_tasks[member].size() まで使う
             static auto new_sum_ramps = array<double, 400>(); // common::completed_tasks[member].size() まで使う
             auto new_log_likelihood = 0.0;
-            // auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
-            rep(idx_completed_tasks, common::completed_tasks[member].size()) {
+            auto log_f = [](const double& x) { return (x * x) * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0)); }; // -x^2 / 6
+            for (int idx_completed_tasks = 0; idx_completed_tasks < common::completed_tasks[member].size() - 1; idx_completed_tasks += 2) {
+                const auto& completed_task_0 = common::completed_tasks[member][idx_completed_tasks];
+                const auto& completed_task_1 = common::completed_tasks[member][idx_completed_tasks + 1];
+                const auto ramp_0 = max(0.0, completed_task_0.d[skill] - s);
+                const auto ramp_1 = max(0.0, completed_task_1.d[skill] - s);
+                new_ramps[idx_completed_tasks] = ramp_0;
+                new_ramps[idx_completed_tasks + 1] = ramp_1;
+                new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp_0 - ramps[skill][idx_completed_tasks];
+                new_sum_ramps[idx_completed_tasks + 1] = sum_ramps[idx_completed_tasks + 1] + ramp_1 - ramps[skill][idx_completed_tasks + 1];
+                const auto w_0 = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task_0.t;
+                const auto w_1 = max(1.0, new_sum_ramps[idx_completed_tasks + 1]) - completed_task_1.t;
+                new_log_likelihood += w_0 * w_0 + w_1 * w_1;
+            }
+            rep3(idx_completed_tasks, common::completed_tasks[member].size() / 2 * 2, common::completed_tasks[member].size()) {
+                // rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                 const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
-                const auto ramp = max(0.0, input::d_double[completed_task.task][skill] - s);
+                const auto ramp = max(0.0, completed_task.d[skill] - s);
                 new_ramps[idx_completed_tasks] = ramp;
-                new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[idx_completed_tasks][skill];
+                new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[skill][idx_completed_tasks];
                 const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
                 new_log_likelihood += w * w;
             }
@@ -938,7 +970,7 @@ struct State {
                 // 採択
                 skills_base[skill] = new_skill_base;
                 rep(idx_completed_tasks, common::completed_tasks[member].size()) {
-                    ramps[idx_completed_tasks][skill] = new_ramps[idx_completed_tasks];
+                    ramps[skill][idx_completed_tasks] = new_ramps[idx_completed_tasks];
                     sum_ramps[idx_completed_tasks] = new_sum_ramps[idx_completed_tasks];
                 }
                 log_likelihood = new_log_likelihood;
@@ -1241,7 +1273,7 @@ inline void SolveLoop() {
             auto task = member_status[member];
             member_status[member] = -1;
             task_status[task] = TaskStatus::Completed;
-            completed_tasks[member].push({task, day - starting_times[member]});
+            completed_tasks[member].push({(double)(day - starting_times[member]), input::d_double[task], task});
             prediction::mh::state[member].AddCompletedTask();
             for (const auto& u : input::G[task]) {
                 in_dims[u]--;

@@ -417,9 +417,13 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> struct LPProblem {
 template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N, MAX_M, MAX_N_COMPONENTS>& lp, const int& max_iteration = 2000) {
     static_assert(MAX_M % 16 == 0);
 
-    constexpr double epsilon1 = 0.00001;
-    constexpr double epsilon2 = 0.00000001;
+    constexpr double epsilon1 = 1e-5;
+    constexpr double epsilon2 = 1e-8;
     constexpr auto MAX_PIVOTS_SIZE = 2000;
+
+    if constexpr (DEBUG_SIMPLEX) {
+        cout << "# n=" << lp.n << " m=" << lp.m << endl;
+    }
 
     // スラック変数を含めた目的関数の係数にする
     fill(lp.c.begin() + lp.n, lp.c.begin() + (lp.n + lp.m), 0.0);
@@ -432,7 +436,7 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
 
     // 非基底変数のラベル、長さ n, 範囲 [0, n + m)
     static array<int, MAX_N> nonbasic;
-    iota(nonbasic.begin(), nonbasic.end(), 0);
+    iota(nonbasic.begin(), nonbasic.begin() + lp.n, 0);
 
     // A のスラック変数の列を単位行列で初期化
     static auto A_components = Stack<SparseMatrixComponent, MAX_N_COMPONENTS + MAX_M>();
@@ -461,11 +465,13 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
         int col;
     };
 
-    int counter = 1;                             // イテレーション回数
-    static array<Eta, MAX_PIVOTS_SIZE> pivots{}; // 過去のピボットを表すイータ行列
-    int pivots_size = 0;                         // イータ行列の個数
-    double z = 0.0;                              // 目的関数の初期値
-    alignas(64) static array<double, MAX_M> y{}; // 長さ m
+    int counter = 1;                           // イテレーション回数
+    static array<Eta, MAX_PIVOTS_SIZE> pivots; // 過去のピボットを表すイータ行列
+    int pivots_size = 0;                       // イータ行列の個数
+    double z = 0.0;                            // 目的関数の初期値
+    alignas(64) static array<double, MAX_M> y; // 長さ m
+    memset(&pivots, 0, sizeof(pivots));
+    memset(&pivots, 0, sizeof(y));
 
     // 改訂シンプレックス法
     while (true) {
@@ -601,6 +607,10 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
 
             // d が小さすぎる値なら、次の entering 変数を見る
             if (d[leaving_row] > epsilon2) {
+                cout << "# d[leaving_row]=" << d[leaving_row] << " cnbars[entering_variable_index].value=" << cnbars[entering_variable_index].value
+                     << endl;
+                cout << "# leaving_label=" << leaving_label << " cnbars[entering_variable_index].label=" << cnbars[entering_variable_index].label
+                     << endl;
                 break;
             } else {
                 entering_variable_index++;
@@ -633,6 +643,9 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
 
         // 目的関数の値を増加させる
         z += entering_variable.value * smallest_t;
+        if constexpr (DEBUG_SIMPLEX) {
+            cout << "# iteration=" << pivots_size << " z=" << z << endl;
+        }
         counter++;
 
         if (pivots_size == max_iteration)

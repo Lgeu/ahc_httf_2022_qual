@@ -1135,6 +1135,7 @@ inline array<int, input::M> Match() {
             update_prediction_tasks.push(task);
         }
     }
+
     if (update_prediction_tasks.size())
         prediction::Predict(update_prediction_tasks);
 
@@ -1145,20 +1146,29 @@ inline array<int, input::M> Match() {
     const auto sink = n - 1;
     const auto task_node_offset = input::M;
 
+    cout << "# マッチでーす 1" << endl;
     // コストは着手開始までの待ち時間を含める
     rep(member, input::M) {
         rep(idx_task, task_candidates.size()) {
             const auto& task = task_candidates[idx_task];
             auto cost = prediction::expected_time[task][member];
+            cout << "# idx_task=" << idx_task << " task_candidates.size()=" << task_candidates.size() << " task=" << task << " cost=" << cost << endl;
+            cout << "# common::in_dims[task]=" << common::in_dims[task] << " common::expected_open_date[task]=" << common::expected_open_date[task]
+                 << endl;
             if (common::in_dims[task] >= 1) {
-                // cout << "# やあ";
+                cout << "# やあ";
                 ASSERT(common::expected_open_date[task] != 0.0, "設定されてないとおかしい");
-                // cout << " 調子はどう？" << endl;
+                cout << " 調子はどう？" << endl;
+                cout << "# task=" << task << endl;
                 cost += max(1.0, common::expected_open_date[task] - common::day);
             }
+            cout << "# cost=" << cost << endl;
+            // cout << "# やあ";
             mcf.add_edge(member, task_node_offset + idx_task, 1, (int)round(cost));
+            // cout << " 元気？" << endl;
         }
     }
+    cout << "# マッチでーす 2" << endl;
     rep(member, input::M) { mcf.add_edge(source, member, 1, 0); }
     rep(idx_task, task_candidates.size()) { mcf.add_edge(task_node_offset + idx_task, sink, 1, 0); }
 
@@ -1355,7 +1365,9 @@ inline void SolveLoop() {
                 if (semi_in_dims[u] == 0) {
                     semi_open_tasks.push(u);
                 }
+                chmax(expected_open_date[u], expected_complete_dates[member]);
             }
+
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;

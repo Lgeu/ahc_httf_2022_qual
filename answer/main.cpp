@@ -686,7 +686,7 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
-constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-3;
+constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-4;
 constexpr auto MCMC_N_SAMPLING = 2000;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 60;
@@ -1112,7 +1112,7 @@ inline void CalcDepth() {
     cout << endl;
 }
 
-inline Stack<int, input::M> Match() {
+inline array<int, input::M> Match() {
     // semi_open_tasks から優先度上位 20 を取り出す
     static auto task_candidates = Stack<int, input::N>();
     task_candidates.clear();
@@ -1167,13 +1167,13 @@ inline Stack<int, input::M> Match() {
 
     // 結果は [メンバー] := タスク の状態で返す
     // タスクが割り当てられなければ -1
-    auto res = Stack<int, input::M>();
-    res.resize(task_candidates.size());
+    auto res = array<int, input::M>();
     fill(res.begin(), res.end(), -1);
 
     rep(member, input::M) {
         rep(idx_task, task_candidates.size()) {
             if (mcf.get_edge(member * task_candidates.size() + idx_task).flow) {
+                ASSERT(res[member] == -1, "1 人に 2 つのタスクが割り当てられるわけないだろ");
                 res[member] = task_candidates[idx_task];
             }
         }
@@ -1478,7 +1478,6 @@ inline void SolveLoop() {
         }
         for (const auto& task_member : chosen)
             open_members.remove(task_member.member);
-        cout << "# ここまで来られたかい？" << endl;
 
         // 良いタスクが見つからなかった人がいれば、マッチング
         if (open_members.size()) {
@@ -1501,12 +1500,10 @@ inline void SolveLoop() {
                     member_status[member] = task;
                     task_to_member[task] = member;
                     starting_times[member] = day;
-                    cout << "# マッチでーす" << endl;
                     // キューの外のやつ予測してないじゃん… → した
                     expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
                     task_status[task] = TaskStatus::InProgress;
                     semi_open_tasks.remove(task);
-                    cout << "# マッチでーす" << endl;
                     for (const auto& u : input::G[task]) {
                         semi_in_dims[u]--;
                         if (semi_in_dims[u] == 0) {

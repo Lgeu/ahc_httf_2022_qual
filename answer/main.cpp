@@ -714,6 +714,8 @@ struct CompletedTask {
 auto completed_tasks = array<Stack<CompletedTask, 400>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
 auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
+auto task_to_member = array<int, input::N>();             // そのタスクは誰がやったか/やっているか
+auto expected_open_date = array<double, input::N>();      // open になりそうな日
 auto member_status = array<int, input::M>();              // -1: 空き, それ以外: 今やってるタスク
 auto expected_complete_dates = array<double, input::M>(); // 終了予定時刻
 auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
@@ -726,6 +728,7 @@ auto level = array<double, input::N>();                   // 後にどれくら�
 auto depth = array<int, input::N>();                      // 何階層の先行するタスクがあるか
 auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
 auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
+auto last_prediction_time = array<int, input::N>();       // 最後にそのタスク予測したときの n_completed_tasks
 auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
 auto day = 1;                                             // 現在の日付
 auto n_completed_tasks = 0;                               // 完了したタスク数
@@ -1034,6 +1037,58 @@ inline void Update(const int& member) {
         }
     }
 }
+
+template <class Container> inline void Predict(const Container& tasks) {
+    // タスクを予測
+    for (const auto& task : tasks) {
+        common::last_prediction_time[task] = common::n_completed_tasks;
+    }
+    static auto f = array<array<array<double, 41>, 20>, input::M>(); // [メンバー][スキル種別][要求スキル値] := そのスキルでかかる時間
+    rep(member, input::M) {
+        rep(skill, input::K) {
+            // 2 階累積和で能力のヒストグラムから各要求スキル値でかかる時間へ変換する
+            auto& hist = skill_histograms[member][skill];
+            auto& fms = f[member][skill];
+            hist.Normalize();
+
+            if constexpr (DEBUG_STATS) {
+                // cout << "# skill_histograms[" << member << "][" << skill << "]=";
+                // auto sum_hist = 0.0;
+                // for (const auto& h : hist.data) {
+                //     cout << h << " ";
+                //     sum_hist += h;
+                // }
+                // cout << endl;
+                // cout << "# sum_hist=" << sum_hist << endl;
+            }
+
+            auto df = 0.0;
+            rep1(i, 40) { // fms[0] は 0.0
+                df += hist.data[i - 1];
+                fms[i] = fms[i - 1] + df;
+            }
+        }
+    }
+    for (const auto& task : tasks) {
+        rep(member, input::M) {
+            expected_time[task][member] = 0.0;
+            expected_time_naive[task][member] = 0.0;
+            rep(skill, input::K) {
+                // 作った表を引く
+                expected_time[task][member] += f[member][skill][input::d[task][skill]];
+                expected_time_naive[task][member] += max(0.0, input::d_double[task][skill] - expected_skill[member][skill]);
+            }
+            expected_time[task][member] =
+                max(1.0, expected_time[task][member]); // これはまあ正確ではない (そんなこと言ったら色んな場所が正確でゎない…)
+            expected_time_naive[task][member] = max(1.0, expected_time_naive[task][member]);
+            if constexpr (DEBUG_STATS) {
+                // cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member]
+                //      << "(naive:" << prediction::expected_time_naive[task][member] << ")" << endl;
+            }
+        }
+    }
+}
+
 } // namespace prediction
 
 // ========================== main loop ==========================
@@ -1060,6 +1115,7 @@ inline void CalcDepth() {
 inline Stack<int, input::M> Match() {
     // semi_open_tasks から優先度上位 20 を取り出す
     static auto task_candidates = Stack<int, input::N>();
+    task_candidates.clear();
     for (const auto& task : common::semi_open_tasks)
         task_candidates.push(task);
     if (task_candidates.size() > input::M) {
@@ -1070,6 +1126,17 @@ inline Stack<int, input::M> Match() {
         });
         task_candidates.resize(input::M);
     }
+
+    // 予測時間を更新
+    static auto update_prediction_tasks = Stack<int, input::M>();
+    update_prediction_tasks.clear();
+    for (const auto& task : task_candidates) {
+        if (common::last_prediction_time[task] + QUEUE_UPDATE_FREQUENCY < common::n_completed_tasks) {
+            update_prediction_tasks.push(task);
+        }
+    }
+    if (update_prediction_tasks.size())
+        prediction::Predict(update_prediction_tasks);
 
     // 最小費用流
     const int n = input::M + task_candidates.size() + 2;
@@ -1082,8 +1149,14 @@ inline Stack<int, input::M> Match() {
     rep(member, input::M) {
         rep(idx_task, task_candidates.size()) {
             const auto& task = task_candidates[idx_task];
-            mcf.add_edge(member, task_node_offset + idx_task, 1,
-                         (int)round(prediction::expected_time[task][member] + max(1.0, common::expected_complete_dates[member] - common::day)));
+            auto cost = prediction::expected_time[task][member];
+            if (common::in_dims[task] >= 1) {
+                // cout << "# やあ";
+                ASSERT(common::expected_open_date[task] != 0.0, "設定されてないとおかしい");
+                // cout << " 調子はどう？" << endl;
+                cost += max(1.0, common::expected_open_date[task] - common::day);
+            }
+            mcf.add_edge(member, task_node_offset + idx_task, 1, (int)round(cost));
         }
     }
     rep(member, input::M) { mcf.add_edge(source, member, 1, 0); }
@@ -1125,10 +1198,12 @@ inline void UpdateQueue() {
                 task = common::next_important_task[task];
                 continue;
             }
-            common::task_queue.push(task);
-            common::task_status[task] = common::TaskStatus::InQueue;
-            if (common::in_dims[task] != 0)
-                common::n_not_open_tasks_in_queue++;
+            if (common::task_status[task] == common::TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
+                common::task_queue.push(task);
+                common::task_status[task] = common::TaskStatus::InQueue;
+                if (common::in_dims[task] != 0)
+                    common::n_not_open_tasks_in_queue++;
+            }
             task = common::next_important_task[task];
             common::next_important_task[last_task] = task;
         }
@@ -1139,53 +1214,7 @@ inline void UpdateQueue() {
     }
 
     // 2. queue 内の各タスクについて、かかる時間の予測を行う
-    {
-        static auto f = array<array<array<double, 41>, 20>, input::M>(); // [メンバー][スキル種別][要求スキル値] := そのスキルでかかる時間
-        rep(member, input::M) {
-            rep(skill, input::K) {
-                // 2 階累積和で能力のヒストグラムから各要求スキル値でかかる時間へ変換する
-                auto& hist = prediction::skill_histograms[member][skill];
-                auto& fms = f[member][skill];
-                hist.Normalize();
-
-                if constexpr (DEBUG_STATS) {
-                    // cout << "# skill_histograms[" << member << "][" << skill << "]=";
-                    // auto sum_hist = 0.0;
-                    // for (const auto& h : hist.data) {
-                    //     cout << h << " ";
-                    //     sum_hist += h;
-                    // }
-                    // cout << endl;
-                    // cout << "# sum_hist=" << sum_hist << endl;
-                }
-
-                auto df = 0.0;
-                rep1(i, 40) { // fms[0] は 0.0
-                    df += hist.data[i - 1];
-                    fms[i] = fms[i - 1] + df;
-                }
-            }
-        }
-        for (const auto& task : common::task_queue) {
-            rep(member, input::M) {
-                prediction::expected_time[task][member] = 0.0;
-                prediction::expected_time_naive[task][member] = 0.0;
-                rep(skill, input::K) {
-                    // 作った表を引く
-                    prediction::expected_time[task][member] += f[member][skill][input::d[task][skill]];
-                    prediction::expected_time_naive[task][member] +=
-                        max(0.0, input::d_double[task][skill] - prediction::expected_skill[member][skill]);
-                }
-                prediction::expected_time[task][member] =
-                    max(1.0, prediction::expected_time[task][member]); // これはまあ正確ではない (そんなこと言ったら色んな場所が正確でゎない…)
-                prediction::expected_time_naive[task][member] = max(1.0, prediction::expected_time_naive[task][member]);
-                if constexpr (DEBUG_STATS) {
-                    // cout << "# expected_time[" << task << "][" << member << "]=" << prediction::expected_time[task][member]
-                    //      << "(naive:" << prediction::expected_time_naive[task][member] << ")" << endl;
-                }
-            }
-        }
-    }
+    prediction::Predict(common::task_queue);
 
     // 3. task の割当を行う
     {
@@ -1315,6 +1344,7 @@ inline void SolveLoop() {
             open_members.pop();
 
             member_status[member] = task;
+            task_to_member[task] = member;
             starting_times[member] = 1;
             expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
             task_status[task] = TaskStatus::InProgress;
@@ -1405,7 +1435,7 @@ inline void SolveLoop() {
                 if (in_dims[task] != 0)
                     continue;
                 const auto& info = scheduling_info[task];
-                if (info.member != member)
+                if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY && info.member != member)
                     continue;
                 auto priority = info.member == member ? info.ratio : 0.0;
                 if (level[task] != 0.0)
@@ -1428,17 +1458,65 @@ inline void SolveLoop() {
                 }
             }
             if (best_task != -1) {
-                chosen.push({best_task, member});
-                task_queue.remove(best_task); // メンバーは後で取り除く
+                const auto& task = best_task;
+                chosen.push({task, member});
+                task_queue.remove(task); // メンバーは後で取り除く
+                member_status[member] = task;
+                task_to_member[task] = member;
+                starting_times[member] = day;
+                expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
+                task_status[task] = TaskStatus::InProgress;
+                semi_open_tasks.remove(task);
+                for (const auto& u : input::G[task]) {
+                    semi_in_dims[u]--;
+                    if (semi_in_dims[u] == 0) {
+                        semi_open_tasks.push(u);
+                    }
+                    chmax(expected_open_date[u], expected_complete_dates[member]);
+                }
             }
         }
         for (const auto& task_member : chosen)
             open_members.remove(task_member.member);
+        cout << "# ここまで来られたかい？" << endl;
 
         // 良いタスクが見つからなかった人がいれば、マッチング
-        Match();
+        if (open_members.size()) {
+            cout << "# マッチングするのかい？" << endl;
+            auto matching = Match();
 
-        // TODO
+            for (int i = open_members.size() - 1; i >= 0; i--) {
+                const auto member = open_members[i];
+                const auto task = matching[member];
+                cout << "# task=" << task << endl;
+                if (task != 0 && in_dims[task] == 0) {
+                    cout << "# マッチでーす" << endl;
+                    const auto idx_task_queue = task_queue.index(task);
+                    cout << "# idx_task_queue=" << idx_task_queue << endl;
+                    if (idx_task_queue != -1) {
+                        task_queue.del(idx_task_queue);
+                    } // キューに入ってなかったときは何もしなくていの？？？本当に？？？
+                    chosen.push({task, member});
+                    open_members.remove(member);
+                    member_status[member] = task;
+                    task_to_member[task] = member;
+                    starting_times[member] = day;
+                    cout << "# マッチでーす" << endl;
+                    // キューの外のやつ予測してないじゃん… → した
+                    expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
+                    task_status[task] = TaskStatus::InProgress;
+                    semi_open_tasks.remove(task);
+                    cout << "# マッチでーす" << endl;
+                    for (const auto& u : input::G[task]) {
+                        semi_in_dims[u]--;
+                        if (semi_in_dims[u] == 0) {
+                            semi_open_tasks.push(u);
+                        }
+                        chmax(expected_open_date[u], expected_complete_dates[member]);
+                    }
+                }
+            }
+        }
 
         int m = chosen.size();
         cout << m;
@@ -1446,20 +1524,6 @@ inline void SolveLoop() {
             // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
             const auto& task = task_member.task;
             const auto& member = task_member.member;
-
-            member_status[member] = task;
-            starting_times[member] = day;
-            expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
-            task_status[task] = TaskStatus::InProgress;
-            // semi_open_tasks.Print(cerr);
-            // cerr << "# task=" << task << endl;
-            semi_open_tasks.remove(task);
-            for (const auto& u : input::G[task]) {
-                semi_in_dims[u]--;
-                if (semi_in_dims[u] == 0) {
-                    semi_open_tasks.push(u);
-                }
-            }
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
@@ -1517,6 +1581,9 @@ void Solve() {
                 common::semi_open_tasks.push(i);
             }
         }
+
+        // task_to_member の初期化
+        fill(common::task_to_member.begin(), common::task_to_member.end(), -1);
 
         // next_important_task と task_queue の初期化
         {

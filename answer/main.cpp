@@ -536,7 +536,10 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
         }
 
         // 目的関数の係数の降順にソート
-        sort(cnbars.begin(), cnbars.begin() + cnbars_size, [](const Variable& a, const Variable& b) { return a.value > b.value; });
+        // 最初の要素以外を使うことはほぼ無いので、4 個目より後は捨てる
+        partial_sort(cnbars.begin(), cnbars.begin() + min(4, cnbars_size), cnbars.begin() + cnbars_size,
+                     [](const Variable& a, const Variable& b) { return a.value > b.value; });
+        chmin(cnbars_size, 4);
 
         // cnbars が空なら entering する候補が無く、最適解が得られた
         if (cnbars_size == 0) {
@@ -607,10 +610,12 @@ template <int MAX_N, int MAX_M, int MAX_N_COMPONENTS> void Solve(LPProblem<MAX_N
 
             // d が小さすぎる値なら、次の entering 変数を見る
             if (d[leaving_row] > epsilon2) {
-                cout << "# d[leaving_row]=" << d[leaving_row] << " cnbars[entering_variable_index].value=" << cnbars[entering_variable_index].value
-                     << endl;
-                cout << "# leaving_label=" << leaving_label << " cnbars[entering_variable_index].label=" << cnbars[entering_variable_index].label
-                     << endl;
+                // cout << "# d[leaving_row]=" << d[leaving_row] << " cnbars[entering_variable_index].value=" << cnbars[entering_variable_index].value
+                //      << endl;
+                // cout << "# leaving_label=" << leaving_label << " cnbars[entering_variable_index].label=" << cnbars[entering_variable_index].label
+                //      << endl;
+                // ソートして何番目のが採用された？
+                cout << "# " << entering_variable_index << "/" << cnbars_size << endl;
                 break;
             } else {
                 entering_variable_index++;

@@ -715,25 +715,26 @@ struct CompletedTask {
 
 auto completed_tasks = array<Stack<CompletedTask, 400>, input::M>();
 enum class TaskStatus { NotStarted, InQueue, InProgress, Completed };
-auto task_status = array<TaskStatus, input::N>();         // タスクの状態。open かどうかは関係ないことに注意
-auto task_to_member = array<int, input::N>();             // そのタスクは誰がやったか/やっているか
-auto expected_open_date = array<double, input::N>();      // open になりそうな日
-auto member_status = array<int, input::M>();              // -1: 空き, それ以外: 今やってるタスク
-auto expected_complete_dates = array<double, input::M>(); // 終了予定時刻
-auto starting_times = array<int, input::M>();             // メンバーがタスクを始めた時刻
-auto in_dims = array<int, input::N>();                    // 入次数、0 になったら open (自由に実行できる)
-auto open_members = Stack<int, input::N>();               // 手の空いたメンバー
-auto semi_open_tasks = Stack<int, input::N>();            // 開いてる / 空く予定のタスク
-auto semi_in_dims = array<int, input::N>();               // 入次数、0 になったら semi-open
-auto rng = Random(3141592653);                            // 乱数生成器
-auto level = array<double, input::N>();                   // 後にどれくらいのタスクがつっかえてるか
-auto depth = array<int, input::N>();                      // 何階層の先行するタスクがあるか
-auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>(); // 早めにこなしたいタスク
-auto next_important_task = array<int, input::N + 1>();    // 次にキューに入れたいタスク (隣接リスト)
-auto last_prediction_time = array<int, input::N>();       // 最後にそのタスク予測したときの n_completed_tasks
-auto n_not_open_tasks_in_queue = 0;                       // キューに入っているタスクのうち、open でないものの数
-auto day = 1;                                             // 現在の日付
-auto n_completed_tasks = 0;                               // 完了したタスク数
+auto task_status = array<TaskStatus, input::N>();                     // タスクの状態。open かどうかは関係ないことに注意
+auto task_to_member = array<int, input::N>();                         // そのタスクは誰がやったか/やっているか
+auto expected_open_date = array<double, input::N>();                  // open になりそうな日
+auto member_status = array<int, input::M>();                          // -1: 空き, それ以外: 今やってるタスク
+auto expected_complete_dates = array<double, input::M>();             // 終了予定時刻
+auto starting_times = array<int, input::M>();                         // メンバーがタスクを始めた時刻
+auto in_dims = array<int, input::N>();                                // 入次数、0 になったら open (自由に実行できる)
+auto open_members = Stack<int, input::N>();                           // 手の空いたメンバー
+auto semi_open_tasks = Stack<int, input::N>();                        // 開いてる / 空く予定のタスク
+auto semi_in_dims = array<int, input::N>();                           // 入次数、0 になったら semi-open
+auto rng = Random(3141592653);                                        // 乱数生成器
+auto level = array<double, input::N>();                               // 後にどれくらいのタスクがつっかえてるか
+auto depth = array<int, input::N>();                                  // 何階層の先行するタスクがあるか
+auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>();             // 早めにこなしたいタスク
+auto open_task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL>(); // 暇なときにやりたいタスク
+auto next_important_task = array<int, input::N + 1>();                // 次にキューに入れたいタスク (隣接リスト)
+auto last_prediction_time = array<int, input::N>();                   // 最後にそのタスク予測したときの n_completed_tasks
+auto n_not_open_tasks_in_queue = 0;                                   // キューに入っているタスクのうち、open でないものの数
+auto day = 1;                                                         // 現在の日付
+auto n_completed_tasks = 0;                                           // 完了したタスク数
 
 struct SchedulingInfo {
     int member;
@@ -1211,23 +1212,44 @@ inline void PushQueue() {
 }
 
 inline void UpdateQueueAnneal() {
+    using common::in_dims;
+    using common::next_important_task;
+    using common::open_task_queue;
+    using common::task_queue;
+    using common::task_status;
+    using common::TaskStatus;
+
     // CalcDepth();
-    int task = common::next_important_task[input::N];
+    int task = next_important_task[input::N];
     int last_task = input::N;
-    while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
-        if (common::task_status[task] == common::TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
-            common::task_queue.push(task);
-            common::task_status[task] = common::TaskStatus::InQueue;
-            if (common::in_dims[task] != 0)
+    while (task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
+        if (task_status[task] == TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
+            task_queue.push(task);
+            task_status[task] = TaskStatus::InQueue;
+            if (in_dims[task] != 0)
                 common::n_not_open_tasks_in_queue++;
         }
-        task = common::next_important_task[task];
-        common::next_important_task[last_task] = task;
+        task = next_important_task[task];
+        next_important_task[last_task] = task;
     }
-    cout << endl;
-    cout << "# task_queue.size()=" << common::task_queue.size() << endl;
-    cout << "# task_queue:";
-    common::task_queue.Print();
+
+    // task_queue に入っていなくて、open なものを open_task_queue に入れる
+    open_task_queue.clear();
+    while (open_task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
+        if (in_dims[task] == 0) {
+            open_task_queue.push(task);
+        }
+        task = next_important_task[task];
+    }
+
+    if constexpr (DEBUG_STATS) {
+        cout << "# task_queue.size()=" << task_queue.size() << endl;
+        cout << "# task_queue:";
+        task_queue.Print();
+        cout << "# open_task_queue.size()=" << open_task_queue.size() << endl;
+        cout << "# open_task_queue:";
+        open_task_queue.Print();
+    }
 }
 
 inline void UpdateQueue() {
@@ -1551,7 +1573,7 @@ inline void SolveLoopLP() {
 }
 
 array<int, input::N> annealing_result;
-inline void Anneal(const Stack<int, 50>& tasks) {
+inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
     // level の高いタスク 50 個くらいを各メンバーに割り当てる
     // メンバーはそれを level の高い順に実行
     // すべて終わるまでにかかるまでの時間を最小化
@@ -1591,7 +1613,11 @@ inline void Anneal(const Stack<int, 50>& tasks) {
     }
 
     // 焼きなまし状態
-    auto tmp_res = array<int, 50>();
+    static auto tmp_res = array<int, 50>();
+    rep(i, tasks.size()) {
+        const auto& task = tasks[i];
+        tmp_res[i] = annealing_result[task];
+    }
 
     // シミュレーション
     struct SimulationResult {
@@ -1666,6 +1692,8 @@ void SolveLoopAnneal() {
     // TODO
 
     // 2 日目以降
+
+    static auto member_task_queue = array<Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL>, input::M>();
     for (day = 2;; day++) {
         int n;
         cin >> n;
@@ -1710,17 +1738,21 @@ void SolveLoopAnneal() {
         // タスクキューの更新
         if (queue_update_flag) {
             UpdateQueueAnneal();
-            prediction::Predict(task_queue);
-            static auto tasks_anneal = Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL>();
-            tasks_anneal.clear();
-            for (const auto& task : task_queue) {
-                tasks_anneal.push(task);
-                if (tasks_anneal.size() == MAX_N_MINIMIZATION_TASKS_ANNEAL) {
-                    break;
-                }
+            static auto tasks_to_predict = Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL * 2>();
+            tasks_to_predict.clear();
+            for (const auto& task : task_queue)
+                tasks_to_predict.push(task);
+            for (const auto& task : open_task_queue)
+                tasks_to_predict.push(task);
+            prediction::Predict(tasks_to_predict);
+            Anneal(task_queue);
+            for (auto&& q : member_task_queue)
+                q.clear();
+            rep(i, task_queue.size()) {
+                const auto& task = task_queue[i];
+                const auto& member = annealing_result[task];
+                member_task_queue[member].push(task);
             }
-            Anneal(tasks_anneal);
-            // 空いた時間にやる用のキューも別で持っていたほうがいいか？
         }
 
         // 着手

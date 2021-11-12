@@ -320,10 +320,15 @@ template <int max_n, int max_m> struct Graph {
     Stack<int, max_n + 1> lefts;
 
     Graph() = default;
-    template <class Container> Graph(const int& n_, Container edges_) {
-        // edges_ は 0-origin
+    template <class Container> Graph(const int& n_, const Container& arg_edges) {
+        cout << "# aaa" << endl;
         n = n_;
-        m = edges_.size();
+        m = arg_edges.size();
+        static Container edges_;
+        edges_.clear();
+        for (const auto& e : arg_edges) {
+            edges_.push(e);
+        }
         sort(edges_.begin(), edges_.end());
         edges.resize(m);
         lefts.resize(n + 1);
@@ -1221,7 +1226,7 @@ inline void UpdateQueueAnneal() {
     using common::task_status;
     using common::TaskStatus;
 
-    // CalcDepth();
+    CalcDepth();
     int task = next_important_task[input::N];
     int last_task = input::N;
     while (task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
@@ -1230,6 +1235,10 @@ inline void UpdateQueueAnneal() {
             task_status[task] = TaskStatus::InQueue;
             if (in_dims[task] != 0)
                 common::n_not_open_tasks_in_queue++;
+            // キューに入れて消去する
+        } else {
+            // キューに入れず消去する
+            // 何もしない
         }
         task = next_important_task[task];
         next_important_task[last_task] = task;
@@ -1238,10 +1247,18 @@ inline void UpdateQueueAnneal() {
     // task_queue に入っていなくて、open なものを open_task_queue に入れる
     open_task_queue.clear();
     while (open_task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
-        if (in_dims[task] == 0) {
-            open_task_queue.push(task);
+        if (task_status[task] == TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
+            if (in_dims[task] == 0) {
+                open_task_queue.push(task);
+            }
+            // キューに入れて消去しない
+            last_task = task;
+            task = next_important_task[task];
+        } else {
+            // キューに入れず消去する
+            task = next_important_task[task];
+            next_important_task[last_task] = task;
         }
-        task = next_important_task[task];
     }
 
     if constexpr (DEBUG_STATS) {
@@ -1536,7 +1553,7 @@ inline void SolveLoopLP() {
             for (int i = open_members.size() - 1; i >= 0; i--) {
                 const auto member = open_members[i];
                 const auto task = matching[member];
-                if (task != 0 && in_dims[task] == 0) {
+                if (task != -1 && in_dims[task] == 0) {
                     // cout << "# マッチでーす" << endl;
                     const auto idx_task_queue = task_queue.index(task);
                     if (idx_task_queue != -1) {
@@ -1596,6 +1613,11 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
         const auto& task = tasks[v];
         task_idxs[task] = v;
     }
+    rep(member, input::M) {
+        const auto& task = member_status[member];
+        if (task != -1)
+            task_idxs[task] = tasks.size() + member;
+    }
     static auto rev_edges = Stack<Edge, 3000>();
     rev_edges.clear();
     rep(v, tasks.size()) {
@@ -1604,20 +1626,25 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
                 rev_edges.push({task_idxs[u_task], v});
         }
     }
-    static auto G = Graph<50, 3000>();
-    new (&G) Graph<50, 3000>(tasks.size(), rev_edges);
+    cout << "# anl" << endl;
+    static auto rG = Graph<MAX_N_MINIMIZATION_TASKS + input::M, 3000>();
+    new (&rG) Graph<MAX_N_MINIMIZATION_TASKS + input::M, 3000>(tasks.size(), rev_edges);
     // cout << "# G.edges=";
     // G.edges.Print();
     // cout << "# G.lefts=";
     // G.lefts.Print();
-    static auto initial_end_time = array<double, MAX_N_MINIMIZATION_TASKS_ANNEAL>();
-    fill(initial_end_time.begin(), initial_end_time.end(), 0.0);
+    cout << "# anl" << endl;
+    static auto initial_end_time = array<double, MAX_N_MINIMIZATION_TASKS_ANNEAL + input::M>();
+    fill(initial_end_time.begin(), initial_end_time.end(), (double)common::day);
     rep(member, input::M) {
         const auto& task = member_status[member];
-        if (task != 0.0)
-            initial_end_time[task] = max(1.0, expected_complete_dates[member] - (double)common::day);
+        if (task != -1)
+            initial_end_time[tasks.size() + member] = max(1.0, expected_complete_dates[member] - (double)common::day);
     }
+    static auto initial_last_task = array<int, input::M>();
+    iota(initial_last_task.begin(), initial_last_task.end(), tasks.size());
 
+    cout << "# anl" << endl;
     // 焼きなまし状態
     static auto tmp_res = array<int, 50>();
     rep(i, tasks.size()) {
@@ -1635,17 +1662,51 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
         }
     };
     auto Simulate = [&]() {
+        //         for (const auto& task : task_queue) {
+        //     expected_task_complete_dates[task] = day;
+        // }
+
+        // // 先行するタスクが全て終わっており、かつ自分の前のタスクも終わっているとき、次の自分のタスクを開始できる
+
+        // rep(member, input::M) {
+        //     if (member_status[member] != -1) {
+        //         const auto& task = member_status[member];
+        //         chmax(expected_task_complete_dates[task], expected_complete_dates[member]);
+        //         for (const auto& u : input::G[task]) {
+        //             chmax(expected_task_complete_dates[u],
+        //                   expected_task_complete_dates[task] + prediction::expected_time[u][annealing_result[u]]);
+        //         }
+        //         const auto& u = next_same_member_task[task];
+        //         if (u != -1) {
+        //             chmax(expected_task_complete_dates[u],
+        //                   expected_task_complete_dates[task] + prediction::expected_time[u][annealing_result[u]]);
+        //         }
+        //     }
+        // }
+        // for (const auto& v : task_queue) {
+        //     for (const auto& u : input::G[v]) {
+        //         chmax(expected_task_complete_dates[u], expected_task_complete_dates[v] + prediction::expected_time[u][annealing_result[u]]);
+        //     }
+        //     const auto& u = next_same_member_task[v];
+        //     if (u != -1) {
+        //         chmax(expected_task_complete_dates[u], expected_task_complete_dates[v] + prediction::expected_time[u][annealing_result[u]]);
+        //     }
+        // }
         auto end_time = initial_end_time;
+        auto last_task = initial_last_task;
         auto res = SimulationResult{};
         rep(v, tasks.size()) {
             // cout << "# v=" << v << endl;
-            for (const auto& p : G[v]) {
+            for (const auto& p : rG[v]) {
                 // cout << "# p=" << p << endl;
                 chmax(end_time[v], end_time[p]);
             }
             // cout << "# out" << endl;
             const auto& v_task = tasks[v];
-            const auto& t = expected_time[v_task][tmp_res[v]];
+            const auto& member = tmp_res[v];
+            chmax(end_time[v], end_time[last_task[member]]);
+            last_task[member] = v;
+            const auto& t = expected_time[v_task][member];
             end_time[v] += t;
             res.sum_time += t;
             chmax(res.max_end_time, end_time[v]);
@@ -1667,6 +1728,7 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
             const auto new_score = Simulate();
             if (new_score < best_score) {
                 best_score = new_score;
+                cout << "# best_score=" << best_score.max_end_time << endl;
             } else {
                 // 戻す
                 swap(tmp_res[left], tmp_res[right]);
@@ -1682,6 +1744,7 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
             const auto new_score = Simulate();
             if (new_score < best_score) {
                 best_score = new_score;
+                cout << "# best_score=" << best_score.max_end_time << endl;
             } else {
                 // 戻す
                 tmp_res[task] = old_member;
@@ -1768,7 +1831,9 @@ void SolveLoopAnneal() {
             for (const auto& task : open_task_queue)
                 tasks_to_predict.push(task);
             prediction::Predict(tasks_to_predict);
+            cout << "# ahuhu" << endl;
             Anneal(task_queue);
+            cout << "# ahuhu" << endl;
             for (auto&& q : member_task_queue)
                 q.clear();
             rep(i, task_queue.size()) {
@@ -1791,9 +1856,9 @@ void SolveLoopAnneal() {
         // 終了予定時刻の更新
         if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY_ANNEAL) {
             // fill(expected_task_complete_dates.begin(), expected_task_complete_dates.end(), (double)day);
-            // for (const auto& task : task_queue) {
-            //     expected_task_complete_dates[task] = day;
-            // }
+            for (const auto& task : task_queue) {
+                expected_task_complete_dates[task] = day;
+            }
 
             // 先行するタスクが全て終わっており、かつ自分の前のタスクも終わっているとき、次の自分のタスクを開始できる
 
@@ -1856,6 +1921,12 @@ void SolveLoopAnneal() {
                                                           : -999.9);
             }
             cout << endl;
+
+            cout << "# task_queue: ";
+            task_queue.Print();
+
+            cout << "# open_task_queue: ";
+            open_task_queue.Print();
         }
 
         // 着手
@@ -1864,6 +1935,7 @@ void SolveLoopAnneal() {
         };
         static auto chosen = Stack<TaskMember, 20>();
         chosen.clear();
+
         for (const auto& member : open_members) {
             auto best_task = -1;
             auto best_task_from_open_task_queue = false;
@@ -1907,17 +1979,30 @@ void SolveLoopAnneal() {
             best_task_determined:
                 const auto& task = best_task;
                 chosen.push({task, member});
+                cout << "# task=" << task << endl;
                 if (best_task_from_open_task_queue) {
+                    cout << "# 聞こえていますか aaa" << endl;
                     open_task_queue.remove(task);
                 } else {
+                    cout << "# 聞こえていますか bbb" << endl;
                     task_queue.remove(task); // メンバーは後で取り除く
+                    if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY_ANNEAL)
+                        member_task_queue[member].remove(task);
                 }
+                cout << "# 聞こえていますかdet" << endl;
                 member_status[member] = task;
                 task_to_member[task] = member;
                 starting_times[member] = day;
                 expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
                 task_status[task] = TaskStatus::InProgress;
+                cout << "# det" << endl;
+                cout << "# task=" << task << endl;
+                cout << "# dim=" << in_dims[task] << endl;
+                cout << "# semi_in_dims=" << semi_in_dims[task] << endl;
+                cout << "# semi_open_tasks=";
+                semi_open_tasks.Print();
                 semi_open_tasks.remove(task);
+                cout << "# det" << endl;
                 for (const auto& u : input::G[task]) {
                     semi_in_dims[u]--;
                     if (semi_in_dims[u] == 0) {
@@ -1925,6 +2010,7 @@ void SolveLoopAnneal() {
                     }
                     chmax(expected_open_date[u], expected_complete_dates[member]);
                 }
+                cout << "# det" << endl;
             }
         }
         for (const auto& task_member : chosen)

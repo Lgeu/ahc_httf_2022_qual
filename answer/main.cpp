@@ -1146,29 +1146,18 @@ inline array<int, input::M> Match() {
     const auto sink = n - 1;
     const auto task_node_offset = input::M;
 
-    cout << "# マッチでーす 1" << endl;
     // コストは着手開始までの待ち時間を含める
     rep(member, input::M) {
         rep(idx_task, task_candidates.size()) {
             const auto& task = task_candidates[idx_task];
             auto cost = prediction::expected_time[task][member];
-            cout << "# idx_task=" << idx_task << " task_candidates.size()=" << task_candidates.size() << " task=" << task << " cost=" << cost << endl;
-            cout << "# common::in_dims[task]=" << common::in_dims[task] << " common::expected_open_date[task]=" << common::expected_open_date[task]
-                 << endl;
             if (common::in_dims[task] >= 1) {
-                cout << "# やあ";
                 ASSERT(common::expected_open_date[task] != 0.0, "設定されてないとおかしい");
-                cout << " 調子はどう？" << endl;
-                cout << "# task=" << task << endl;
                 cost += max(1.0, common::expected_open_date[task] - common::day);
             }
-            cout << "# cost=" << cost << endl;
-            // cout << "# やあ";
             mcf.add_edge(member, task_node_offset + idx_task, 1, (int)round(cost));
-            // cout << " 元気？" << endl;
         }
     }
-    cout << "# マッチでーす 2" << endl;
     rep(member, input::M) { mcf.add_edge(source, member, 1, 0); }
     rep(idx_task, task_candidates.size()) { mcf.add_edge(task_node_offset + idx_task, sink, 1, 0); }
 
@@ -1493,17 +1482,15 @@ inline void SolveLoop() {
 
         // 良いタスクが見つからなかった人がいれば、マッチング
         if (open_members.size()) {
-            cout << "# マッチングするのかい？" << endl;
+            // cout << "# マッチングするのかい？ open_members.size()=" << open_members.size() << endl;
             auto matching = Match();
 
             for (int i = open_members.size() - 1; i >= 0; i--) {
                 const auto member = open_members[i];
                 const auto task = matching[member];
-                cout << "# task=" << task << endl;
                 if (task != 0 && in_dims[task] == 0) {
-                    cout << "# マッチでーす" << endl;
+                    // cout << "# マッチでーす" << endl;
                     const auto idx_task_queue = task_queue.index(task);
-                    cout << "# idx_task_queue=" << idx_task_queue << endl;
                     if (idx_task_queue != -1) {
                         task_queue.del(idx_task_queue);
                     } // キューに入ってなかったときは何もしなくていの？？？本当に？？？
@@ -1536,8 +1523,6 @@ inline void SolveLoop() {
             cout << " " << member + 1 << " " << task + 1;
         }
         cout << endl;
-
-        cout << "#???" << endl;
     }
 }
 void Solve() {

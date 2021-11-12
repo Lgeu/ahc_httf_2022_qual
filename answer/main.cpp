@@ -692,7 +692,7 @@ constexpr auto DEBUG_STATS = true;
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr auto MCMC_N_SAMPLING = 4000;
-constexpr auto MCMC_Q_L2_NORM_RANGE = 10.0;         // OPTIMIZE LOG [2.0 20.0]
+constexpr auto MCMC_Q_L2_NORM_RANGE = 10.0;         // OPTIMIZE LOG [2.0, 20.0]
 constexpr auto MCMC_Q_RANGE = 2.0;                  // OPTIMIZE LOG [0.2, 10.0]
 constexpr auto EXPECTED_SKILL_EMA_ALPHA_COEF = 0.2; // OPTIMIZE LOG [0.02, 2.0]
 constexpr auto EXPECTED_SKILL_EMA_ALPHA = EXPECTED_SKILL_EMA_ALPHA_COEF / MCMC_N_SAMPLING;

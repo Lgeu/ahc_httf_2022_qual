@@ -686,8 +686,8 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
-constexpr static auto EXPECTED_SKILL_EMA_ALPHA = 2e-4;
 constexpr auto MCMC_N_SAMPLING = 2000;
+constexpr auto EXPECTED_SKILL_EMA_ALPHA = 0.2 / MCMC_N_SAMPLING;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
 constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 60;
 
@@ -1180,37 +1180,39 @@ inline array<int, input::M> Match() {
     return res;
 }
 
+inline void PushQueue() {
+    CalcDepth();
+    int task = common::next_important_task[input::N];
+    int last_task = input::N;
+    cout << "# all tasks: ";
+    while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
+        cout << task << ",";
+        if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
+            common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
+            last_task = task;
+            task = common::next_important_task[task];
+            continue;
+        }
+        if (common::task_status[task] == common::TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
+            common::task_queue.push(task);
+            common::task_status[task] = common::TaskStatus::InQueue;
+            if (common::in_dims[task] != 0)
+                common::n_not_open_tasks_in_queue++;
+        }
+        task = common::next_important_task[task];
+        common::next_important_task[last_task] = task;
+    }
+    cout << endl;
+    cout << "# task_queue.size()=" << common::task_queue.size() << endl;
+    cout << "# task_queue:";
+    common::task_queue.Print();
+}
+
 inline void UpdateQueue() {
     // task_queue を更新する
 
     // 1. queue に task を追加する
-    {
-        CalcDepth();
-        int task = common::next_important_task[input::N];
-        int last_task = input::N;
-        cout << "# all tasks: ";
-        while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
-            cout << task << ",";
-            if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
-                common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
-                last_task = task;
-                task = common::next_important_task[task];
-                continue;
-            }
-            if (common::task_status[task] == common::TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
-                common::task_queue.push(task);
-                common::task_status[task] = common::TaskStatus::InQueue;
-                if (common::in_dims[task] != 0)
-                    common::n_not_open_tasks_in_queue++;
-            }
-            task = common::next_important_task[task];
-            common::next_important_task[last_task] = task;
-        }
-        cout << endl;
-        cout << "# task_queue.size()=" << common::task_queue.size() << endl;
-        cout << "# task_queue:";
-        common::task_queue.Print();
-    }
+    PushQueue();
 
     // 2. queue 内の各タスクについて、かかる時間の予測を行う
     prediction::Predict(common::task_queue);
@@ -1318,7 +1320,7 @@ inline void UpdateQueue() {
     }
 }
 
-inline void SolveLoop() {
+inline void Day1() {
     using namespace common;
     fill(member_status.begin(), member_status.end(), -1);
 
@@ -1373,11 +1375,11 @@ inline void SolveLoop() {
         ASSERT(right == task_queue.size(), "算数がおかしい");
         task_queue.resize(task_queue.size() - m);
     }
+}
 
+inline void SolveLoopLP() {
+    using namespace common;
     // 2 日目以降
-    struct Output {
-        int member, task;
-    };
     for (day = 2;; day++) {
         int n;
         cin >> n;
@@ -1525,6 +1527,228 @@ inline void SolveLoop() {
         cout << endl;
     }
 }
+
+array<int, input::N> annealing_result;
+inline void Anneal(const Stack<int, 50>& tasks) {
+    // level の高いタスク 50 個くらいを各メンバーに割り当てる
+    // メンバーはそれを level の高い順に実行
+    // すべて終わるまでにかかるまでの時間を最小化
+    // level の高いものだけなので空き時間ができるが、そこには level の低い open なタスクを後で詰め込む
+    // 引数 tasks には、level が高い順にタスクが格納されている
+
+    // 逆向きの部分グラフを作る
+    // インデックスも tasks のものに張り替える
+
+    using common::expected_complete_dates;
+    using common::member_status;
+    using common::rng;
+    using prediction::expected_time;
+
+    static auto task_idxs = array<int, input::N>();
+    fill(task_idxs.begin(), task_idxs.end(), -1);
+    rep(v, tasks.size()) {
+        const auto& task = tasks[v];
+        task_idxs[task] = true;
+    }
+    static auto rev_edges = Stack<Edge, 3000>();
+    rev_edges.clear();
+    rep(v, tasks.size()) {
+        const auto& v_task = tasks[v];
+        for (const auto& u_task : input::G[v]) {
+            rev_edges.push({task_idxs[u_task], v});
+        }
+    }
+    static auto G = Graph<50, 3000>();
+    new (&G) Graph<50, 3000>(tasks.size(), rev_edges);
+    static auto initial_end_time = array<double, input::M>();
+    rep(member, input::M) {
+        if (member_status[member] == -1)
+            initial_end_time[member] = 0.0;
+        else
+            initial_end_time[member] = max(1.0, expected_complete_dates[member] - (double)common::day);
+    }
+
+    // 焼きなまし状態
+    auto tmp_res = array<int, 50>();
+
+    auto Simulate = [&]() {
+        auto end_time = initial_end_time;
+        auto max_end_time = 0.0;
+        rep(v, tasks.size()) {
+            for (const auto& p : G[v]) {
+                chmax(end_time[v], end_time[p]);
+            }
+            const auto& v_task = tasks[v];
+            const auto& t = expected_time[v_task][tmp_res[v]];
+            end_time[v] += t;
+            chmax(max_end_time, end_time[v]);
+        }
+        return max_end_time;
+    };
+
+    rep(iteration, 10000) {
+        const auto r = rng.randint(2);
+        if (r == 0) {
+            // スワップ
+        } else {
+            // 移動
+        }
+    }
+}
+
+void SolveLoopAnneal() {
+    using namespace common;
+    // TODO
+
+    // 2 日目以降
+    for (day = 2;; day++) {
+        int n;
+        cin >> n;
+        cout << "# day=" << day << " n=" << n << endl;
+        if (n == -1) {
+            return;
+        } else if (n == 0) {
+            cout << 0 << endl;
+            continue;
+        };
+
+        auto queue_update_flag = false;
+        rep(i, n) {
+            // 完了 ... member_status, task_status in_dims の更新, open_tasks, open_members の追加
+            int member;
+            cin >> member;
+            member--;
+            auto task = member_status[member];
+            member_status[member] = -1;
+            task_status[task] = TaskStatus::Completed;
+            completed_tasks[member].push({(double)(day - starting_times[member]), input::d_double[task], task});
+            prediction::mh::state[member].AddCompletedTask();
+            for (const auto& u : input::G[task]) {
+                in_dims[u]--;
+                if (in_dims[u] == 0) {
+                    if (task_status[u] == TaskStatus::InQueue) {
+                        n_not_open_tasks_in_queue--;
+                    }
+                }
+            }
+            open_members.push(member);
+            prediction::Update(member);
+            prediction::PrintExpectedSkill(member);
+            n_completed_tasks++;
+            if (n_completed_tasks % QUEUE_UPDATE_FREQUENCY == 0) {
+                queue_update_flag = true;
+            }
+        }
+        cout << "# n_completed_tasks=" << n_completed_tasks << endl;
+        cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
+
+        // タスクキューの更新
+        if (queue_update_flag)
+            UpdateQueue();
+
+        // 着手
+        struct TaskMember {
+            int task, member;
+        };
+        static auto chosen = Stack<TaskMember, 20>();
+        chosen.clear();
+        for (const auto& member : open_members) {
+            auto best_task = -1;
+            auto best_task_priority = -1.0;
+            for (const auto& task : task_queue) {
+                if (in_dims[task] != 0)
+                    continue;
+                const auto& info = scheduling_info[task];
+                if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY && info.member != member)
+                    continue;
+                auto priority = info.member == member ? info.ratio : 0.0;
+                if (level[task] != 0.0)
+                    priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;
+                if (best_task_priority != priority) {
+                    if (best_task_priority < priority) {
+                        best_task_priority = priority;
+                        best_task = task;
+                    }
+                } else if (level[task] != level[best_task]) {
+                    if (level[best_task] < level[task]) {
+                        best_task_priority = priority;
+                        best_task = task;
+                    }
+                } else {
+                    if (prediction::task_weights[best_task] < prediction::task_weights[task]) {
+                        best_task_priority = priority;
+                        best_task = task;
+                    }
+                }
+            }
+            if (best_task != -1) {
+                const auto& task = best_task;
+                chosen.push({task, member});
+                task_queue.remove(task); // メンバーは後で取り除く
+                member_status[member] = task;
+                task_to_member[task] = member;
+                starting_times[member] = day;
+                expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
+                task_status[task] = TaskStatus::InProgress;
+                semi_open_tasks.remove(task);
+                for (const auto& u : input::G[task]) {
+                    semi_in_dims[u]--;
+                    if (semi_in_dims[u] == 0) {
+                        semi_open_tasks.push(u);
+                    }
+                    chmax(expected_open_date[u], expected_complete_dates[member]);
+                }
+            }
+        }
+        for (const auto& task_member : chosen)
+            open_members.remove(task_member.member);
+
+        // 良いタスクが見つからなかった人がいれば、マッチング
+        if (open_members.size()) {
+            // cout << "# マッチングするのかい？ open_members.size()=" << open_members.size() << endl;
+            auto matching = Match();
+
+            for (int i = open_members.size() - 1; i >= 0; i--) {
+                const auto member = open_members[i];
+                const auto task = matching[member];
+                if (task != 0 && in_dims[task] == 0) {
+                    // cout << "# マッチでーす" << endl;
+                    const auto idx_task_queue = task_queue.index(task);
+                    if (idx_task_queue != -1) {
+                        task_queue.del(idx_task_queue);
+                    } // キューに入ってなかったときは何もしなくていの？？？本当に？？？
+                    chosen.push({task, member});
+                    open_members.remove(member);
+                    member_status[member] = task;
+                    task_to_member[task] = member;
+                    starting_times[member] = day;
+                    // キューの外のやつ予測してないじゃん… → した
+                    expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
+                    task_status[task] = TaskStatus::InProgress;
+                    semi_open_tasks.remove(task);
+                    for (const auto& u : input::G[task]) {
+                        semi_in_dims[u]--;
+                        if (semi_in_dims[u] == 0) {
+                            semi_open_tasks.push(u);
+                        }
+                        chmax(expected_open_date[u], expected_complete_dates[member]);
+                    }
+                }
+            }
+        }
+
+        int m = chosen.size();
+        cout << m;
+        for (const auto& task_member : chosen) {
+            // 着手 ... open_tasks から pop, open_members から pop, member_status, task_status の更新
+            const auto& task = task_member.task;
+            const auto& member = task_member.member;
+            cout << " " << member + 1 << " " << task + 1;
+        }
+        cout << endl;
+    }
+}
+
 void Solve() {
     // 1. 初期化
     {
@@ -1617,6 +1841,7 @@ void Solve() {
         cout << "# n_not_open_tasks_in_queue=" << common::n_not_open_tasks_in_queue << endl;
     }
 
+    Day1();
     SolveLoop();
 }
 

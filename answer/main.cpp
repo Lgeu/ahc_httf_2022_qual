@@ -692,9 +692,14 @@ constexpr auto DEBUG_STATS = true;
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr auto MCMC_N_SAMPLING = 4000;
-constexpr auto EXPECTED_SKILL_EMA_ALPHA = 0.2 / MCMC_N_SAMPLING;
+constexpr auto MCMC_Q_L2_NORM_RANGE = 10.0;         // OPTIMIZE LOG [2.0 20.0]
+constexpr auto MCMC_Q_RANGE = 2.0;                  // OPTIMIZE LOG [0.2, 10.0]
+constexpr auto EXPECTED_SKILL_EMA_ALPHA_COEF = 0.2; // OPTIMIZE LOG [0.02, 2.0]
+constexpr auto EXPECTED_SKILL_EMA_ALPHA = EXPECTED_SKILL_EMA_ALPHA_COEF / MCMC_N_SAMPLING;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
-constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 80;
+constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 80; // OPTIMIZE [60, 100]
+constexpr auto PRIORITY_DAY_OFFSET = 700;          // OPTIMIZE [400, 1200]
+constexpr auto PRIORITY_COEF = 0.02;               // OPTIMIZE LOG [0.002, 2.0]
 
 namespace input {
 constexpr auto N = 1000;                                   // タスク数
@@ -820,7 +825,7 @@ inline void PrintExpectedSkill(const int& member) {
 #endif
 }
 
-namespace mh {
+namespace mh { // メトロポリス・ヘイスティング
 struct State {
     // 実際のスキル数値 = l2_norm / root_sum_square_skills_base * skills_base
     array<double, 20> skills_base; // パラメータ, 事前分布は正規分布
@@ -877,7 +882,6 @@ struct State {
         const auto skill = rng.randint(input::K + 1);
         if (skill == input::K) {
             // 1. l2_norm だけ変更, 事前確率は変化しない
-            constexpr static auto MCMC_Q_L2_NORM_RANGE = 10.0;
             const auto delta = (rng.random() - 0.5) * MCMC_Q_L2_NORM_RANGE;
             const auto tmp = l2_norm + delta;
             const auto new_l2_norm = tmp > 60.0 ? 120.0 - tmp : tmp < 20.0 ? 40.0 - tmp : tmp;
@@ -941,7 +945,6 @@ struct State {
             const auto scale = l2_norm / root_sum_square_skills_base;
             double new_skill_base, delta_sum_square_skills_base, new_sum_square_skills_base, new_root_sum_square_skills_base, new_l2_norm;
             do {
-                constexpr static auto MCMC_Q_RANGE = 2.0;
                 const auto delta = (rng.random() - 0.5) * MCMC_Q_RANGE;
                 new_skill_base = skills_base[skill] + delta;
                 delta_sum_square_skills_base = new_skill_base * new_skill_base - skills_base[skill] * skills_base[skill];
@@ -1453,7 +1456,7 @@ inline void SolveLoopLP() {
                     continue;
                 auto priority = info.member == member ? info.ratio : 0.0;
                 if (level[task] != 0.0)
-                    priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;
+                    priority *= 1.0 + max(0.0, day - PRIORITY_DAY_OFFSET + level[task]) * PRIORITY_COEF;
                 if (best_task_priority != priority) {
                     if (best_task_priority < priority) {
                         best_task_priority = priority;

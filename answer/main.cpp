@@ -686,9 +686,11 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
+constexpr auto MAX_N_MINIMIZATION_TASKS_ANNEAL = 50;
 constexpr auto MCMC_N_SAMPLING = 2000;
 constexpr auto EXPECTED_SKILL_EMA_ALPHA = 0.2 / MCMC_N_SAMPLING;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
+constexpr auto QUEUE_UPDATE_FREQUENCY_ANNEAL = 10;
 constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 60;
 
 namespace input {
@@ -1208,6 +1210,26 @@ inline void PushQueue() {
     common::task_queue.Print();
 }
 
+inline void UpdateQueueAnneal() {
+    // CalcDepth();
+    int task = common::next_important_task[input::N];
+    int last_task = input::N;
+    while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS_ANNEAL && task != input::N) {
+        if (common::task_status[task] == common::TaskStatus::NotStarted) { // キューを介さずタスクを実行することがあるので注意
+            common::task_queue.push(task);
+            common::task_status[task] = common::TaskStatus::InQueue;
+            if (common::in_dims[task] != 0)
+                common::n_not_open_tasks_in_queue++;
+        }
+        task = common::next_important_task[task];
+        common::next_important_task[last_task] = task;
+    }
+    cout << endl;
+    cout << "# task_queue.size()=" << common::task_queue.size() << endl;
+    cout << "# task_queue:";
+    common::task_queue.Print();
+}
+
 inline void UpdateQueue() {
     // task_queue を更新する
 
@@ -1571,9 +1593,18 @@ inline void Anneal(const Stack<int, 50>& tasks) {
     // 焼きなまし状態
     auto tmp_res = array<int, 50>();
 
+    // シミュレーション
+    struct SimulationResult {
+        double max_end_time, sum_time;
+        bool operator<(const SimulationResult& rhs) const {
+            if (max_end_time != rhs.max_end_time)
+                return max_end_time < rhs.max_end_time;
+            return sum_time < rhs.sum_time;
+        }
+    };
     auto Simulate = [&]() {
         auto end_time = initial_end_time;
-        auto max_end_time = 0.0;
+        auto res = SimulationResult{};
         rep(v, tasks.size()) {
             for (const auto& p : G[v]) {
                 chmax(end_time[v], end_time[p]);
@@ -1581,18 +1612,52 @@ inline void Anneal(const Stack<int, 50>& tasks) {
             const auto& v_task = tasks[v];
             const auto& t = expected_time[v_task][tmp_res[v]];
             end_time[v] += t;
-            chmax(max_end_time, end_time[v]);
+            res.sum_time += t;
+            chmax(res.max_end_time, end_time[v]);
         }
-        return max_end_time;
+        return res;
     };
 
+    // なます
+    auto best_score = Simulate();
     rep(iteration, 10000) {
         const auto r = rng.randint(2);
         if (r == 0) {
             // スワップ
+            const auto left = rng.randint(tasks.size());
+            const auto right = rng.randint(tasks.size());
+            if (tmp_res[left] == tmp_res[right])
+                continue;
+            swap(tmp_res[left], tmp_res[right]);
+            const auto new_score = Simulate();
+            if (new_score < best_score) {
+                best_score = new_score;
+            } else {
+                // 戻す
+                swap(tmp_res[left], tmp_res[right]);
+            }
         } else {
             // 移動
+            const auto task = rng.randint(tasks.size());
+            const auto member = rng.randint(tasks.size());
+            if (tmp_res[task] == member)
+                continue;
+            const auto old_member = tmp_res[task];
+            tmp_res[task] = member;
+            const auto new_score = Simulate();
+            if (new_score < best_score) {
+                best_score = new_score;
+            } else {
+                // 戻す
+                tmp_res[task] = old_member;
+            }
         }
+    }
+
+    // 結果
+    rep(i, tasks.size()) {
+        const auto& task = tasks[i];
+        annealing_result[task] = tmp_res[i];
     }
 }
 
@@ -1635,7 +1700,7 @@ void SolveLoopAnneal() {
             prediction::Update(member);
             prediction::PrintExpectedSkill(member);
             n_completed_tasks++;
-            if (n_completed_tasks % QUEUE_UPDATE_FREQUENCY == 0) {
+            if (n_completed_tasks % QUEUE_UPDATE_FREQUENCY_ANNEAL == 0) {
                 queue_update_flag = true;
             }
         }
@@ -1643,8 +1708,20 @@ void SolveLoopAnneal() {
         cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
 
         // タスクキューの更新
-        if (queue_update_flag)
-            UpdateQueue();
+        if (queue_update_flag) {
+            UpdateQueueAnneal();
+            prediction::Predict(task_queue);
+            static auto tasks_anneal = Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL>();
+            tasks_anneal.clear();
+            for (const auto& task : task_queue) {
+                tasks_anneal.push(task);
+                if (tasks_anneal.size() == MAX_N_MINIMIZATION_TASKS_ANNEAL) {
+                    break;
+                }
+            }
+            Anneal(tasks_anneal);
+            // 空いた時間にやる用のキューも別で持っていたほうがいいか？
+        }
 
         // 着手
         struct TaskMember {
@@ -1751,6 +1828,7 @@ void SolveLoopAnneal() {
 
 void Solve() {
     // 1. 初期化
+    auto ANNEAL = true;
     {
         // 入力の読み込み
         int dummy;
@@ -1816,22 +1894,10 @@ void Solve() {
             rep(i, input::N - 1) { common::next_important_task[order[i]] = order[i + 1]; }
             common::next_important_task[order[input::N - 1]] = input::N;
 
-            CalcDepth();
-            int task = common::next_important_task[input::N];
-            int last_task = input::N;
-            while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
-                if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
-                    common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
-                    last_task = task;
-                    task = common::next_important_task[task];
-                    continue;
-                }
-                common::task_queue.push(task);
-                common::task_status[task] = common::TaskStatus::InQueue;
-                if (common::in_dims[task] != 0)
-                    common::n_not_open_tasks_in_queue++;
-                task = common::next_important_task[task];
-                common::next_important_task[last_task] = task;
+            if (ANNEAL) {
+                UpdateQueueAnneal();
+            } else {
+                UpdateQueue();
             }
         }
 
@@ -1842,7 +1908,12 @@ void Solve() {
     }
 
     Day1();
-    SolveLoop();
+
+    if (ANNEAL) {
+        SolveLoopAnneal();
+    } else {
+        SolveLoopLP();
+    }
 }
 
 int main() {

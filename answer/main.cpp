@@ -720,6 +720,7 @@ auto task_to_member = array<int, input::N>();                         // その�
 auto expected_open_date = array<double, input::N>();                  // open になりそうな日
 auto member_status = array<int, input::M>();                          // -1: 空き, それ以外: 今やってるタスク
 auto expected_complete_dates = array<double, input::M>();             // 終了予定時刻
+auto expected_task_complete_dates = array<double, input::N>();        // 終了予定時刻 (タスク)
 auto starting_times = array<int, input::M>();                         // メンバーがタスクを始めた時刻
 auto in_dims = array<int, input::N>();                                // 入次数、0 になったら open (自由に実行できる)
 auto open_members = Stack<int, input::N>();                           // 手の空いたメンバー
@@ -1755,6 +1756,37 @@ void SolveLoopAnneal() {
             }
         }
 
+        // 終了予定時刻の更新
+        if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY_ANNEAL) {
+            for (const auto& task : task_queue) {
+                expected_task_complete_dates[task] = 0.0;
+            }
+            rep(member, input::M) {
+                if (member_status[member] != -1) {
+                    const auto& task = member_status[member];
+                    chmax(expected_complete_dates[member], day + 1.0);
+                    chmax(expected_task_complete_dates[task], expected_complete_dates[member]);
+                    for (const auto& u : input::G[task]) {
+                        chmax(expected_task_complete_dates[u],
+                              expected_task_complete_dates[task] + prediction::expected_time[u][annealing_result[u]]);
+                    }
+                }
+            }
+            for (const auto& v : task_queue) {
+                for (const auto& u : input::G[v]) {
+                    chmax(expected_task_complete_dates[u], expected_task_complete_dates[v] + prediction::expected_time[u][annealing_result[u]]);
+                }
+            }
+        }
+
+        cout << "# 各メンバーの次のタスクの着手可能時刻:";
+        rep(member, input::M) {
+            cout << " "
+                 << (member_task_queue[member].size() ? expected_task_complete_dates[member_task_queue[member].front()] -
+                                                            prediction::expected_time[member_task_queue[member].front()][member]
+                                                      : -999.9);
+        }
+
         // 着手
         struct TaskMember {
             int task, member;
@@ -1763,37 +1795,52 @@ void SolveLoopAnneal() {
         chosen.clear();
         for (const auto& member : open_members) {
             auto best_task = -1;
-            auto best_task_priority = -1.0;
-            for (const auto& task : task_queue) {
-                if (in_dims[task] != 0)
-                    continue;
-                const auto& info = scheduling_info[task];
-                if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY && info.member != member)
-                    continue;
-                auto priority = info.member == member ? info.ratio : 0.0;
-                if (level[task] != 0.0)
-                    priority *= 1.0 + max(0.0, day - 700 + level[task]) * 0.02;
-                if (best_task_priority != priority) {
-                    if (best_task_priority < priority) {
-                        best_task_priority = priority;
+            auto best_task_from_open_task_queue = false;
+            if (n_completed_tasks < QUEUE_UPDATE_FREQUENCY_ANNEAL) {
+                for (const auto& task : task_queue) {
+                    if (in_dims[task] != 0)
+                        continue;
+                    best_task = task;
+                    goto best_task_determined;
+                }
+                if (open_task_queue.size()) {
+                    best_task = open_task_queue.front();
+                    best_task_from_open_task_queue = true;
+                    goto best_task_determined;
+                }
+            } else {
+                using prediction::expected_time;
+                auto free_time = 99999.9;
+                if (member_task_queue[member].size()) {
+                    const auto& task = member_task_queue[member].front();
+                    if (in_dims[task] == 0) {
                         best_task = task;
+                        goto best_task_determined;
                     }
-                } else if (level[task] != level[best_task]) {
-                    if (level[best_task] < level[task]) {
-                        best_task_priority = priority;
+                    if (best_task != -1)
+                        free_time = expected_task_complete_dates[task] - expected_time[task][member] - day; // 次のタスクの開始予定時刻までの時間
+                }
+                for (const auto& task : open_task_queue) {
+                    // 時間に空きがあれば
+                    if (expected_time[task][member] < free_time) {
                         best_task = task;
-                    }
-                } else {
-                    if (prediction::task_weights[best_task] < prediction::task_weights[task]) {
-                        best_task_priority = priority;
-                        best_task = task;
+                        best_task_from_open_task_queue = true;
+                        goto best_task_determined;
                     }
                 }
             }
-            if (best_task != -1) {
+
+            continue; // タスクが見つからなかった
+
+            {
+            best_task_determined:
                 const auto& task = best_task;
                 chosen.push({task, member});
-                task_queue.remove(task); // メンバーは後で取り除く
+                if (best_task_from_open_task_queue) {
+                    open_task_queue.remove(task);
+                } else {
+                    task_queue.remove(task); // メンバーは後で取り除く
+                }
                 member_status[member] = task;
                 task_to_member[task] = member;
                 starting_times[member] = day;
@@ -1811,40 +1858,6 @@ void SolveLoopAnneal() {
         }
         for (const auto& task_member : chosen)
             open_members.remove(task_member.member);
-
-        // 良いタスクが見つからなかった人がいれば、マッチング
-        if (open_members.size()) {
-            // cout << "# マッチングするのかい？ open_members.size()=" << open_members.size() << endl;
-            auto matching = Match();
-
-            for (int i = open_members.size() - 1; i >= 0; i--) {
-                const auto member = open_members[i];
-                const auto task = matching[member];
-                if (task != 0 && in_dims[task] == 0) {
-                    // cout << "# マッチでーす" << endl;
-                    const auto idx_task_queue = task_queue.index(task);
-                    if (idx_task_queue != -1) {
-                        task_queue.del(idx_task_queue);
-                    } // キューに入ってなかったときは何もしなくていの？？？本当に？？？
-                    chosen.push({task, member});
-                    open_members.remove(member);
-                    member_status[member] = task;
-                    task_to_member[task] = member;
-                    starting_times[member] = day;
-                    // キューの外のやつ予測してないじゃん… → した
-                    expected_complete_dates[member] = starting_times[member] + prediction::expected_time[task][member];
-                    task_status[task] = TaskStatus::InProgress;
-                    semi_open_tasks.remove(task);
-                    for (const auto& u : input::G[task]) {
-                        semi_in_dims[u]--;
-                        if (semi_in_dims[u] == 0) {
-                            semi_open_tasks.push(u);
-                        }
-                        chmax(expected_open_date[u], expected_complete_dates[member]);
-                    }
-                }
-            }
-        }
 
         int m = chosen.size();
         cout << m;

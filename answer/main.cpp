@@ -691,10 +691,10 @@ constexpr auto DEBUG_STATS = true;
 #endif
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
-constexpr auto MCMC_N_SAMPLING = 2000;
+constexpr auto MCMC_N_SAMPLING = 4000;
 constexpr auto EXPECTED_SKILL_EMA_ALPHA = 0.2 / MCMC_N_SAMPLING;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
-constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 60;
+constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 80;
 
 namespace input {
 constexpr auto N = 1000;                                   // タスク数

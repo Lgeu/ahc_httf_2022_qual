@@ -321,7 +321,6 @@ template <int max_n, int max_m> struct Graph {
 
     Graph() = default;
     template <class Container> Graph(const int& n_, const Container& arg_edges) {
-        cout << "# aaa" << endl;
         n = n_;
         m = arg_edges.size();
         static Container edges_;
@@ -735,7 +734,7 @@ auto in_dims = array<int, input::N>();                         // 入次数、0 
 auto open_members = Stack<int, input::N>();                    // 手の空いたメンバー
 auto semi_open_tasks = Stack<int, input::N>();                 // 開いてる / 空く予定のタスク
 auto semi_in_dims = array<int, input::N>();                    // 入次数、0 になったら semi-open
-auto rng = Random(314159265);                                  // 乱数生成器
+auto rng = Random(max(1u, std::random_device()()));            // 乱数生成器
 auto level = array<double, input::N>();                        // 後にどれくらいのタスクがつっかえてるか
 auto depth = array<int, input::N>();                           // 何階層の先行するタスクがあるか
 auto task_queue = Stack<int, MAX_N_MINIMIZATION_TASKS>();      // 早めにこなしたいタスク
@@ -1028,7 +1027,6 @@ void Initialize() {
             expected_skill[member][skill] = initial_expected_skill[input::K - 10];
             skill_histograms[member][skill].SetInitialValue();
         }
-        // TODO: expected_squared_skill の初期化
         new (&mh::state[member]) remove_reference<decltype(mh::state[member])>::type(member);
         PrintExpectedSkill(member);
     }
@@ -1107,7 +1105,9 @@ inline void CalcDepth() {
     using common::depth;
     using common::in_dims;
     fill(depth.begin(), depth.end(), 0);
-    cout << "# (v,depth)=";
+    if constexpr (DEBUG_STATS) {
+        cout << "# (v,depth)=";
+    }
     rep(v, input::N) {
         if (in_dims[v] == 0) {
             ASSERT(depth[v] == 0, "???????????");
@@ -1117,9 +1117,13 @@ inline void CalcDepth() {
         for (const auto& u : input::G[v]) {
             chmax(depth[u], depth[v] + 1);
         }
-        cout << "(" << v << "," << depth[v] << "),";
+        if constexpr (DEBUG_STATS) {
+            cout << "(" << v << "," << depth[v] << "),";
+        }
     }
-    cout << endl;
+    if constexpr (DEBUG_STATS) {
+        cout << endl;
+    }
 }
 
 inline array<int, input::M> Match() {
@@ -1198,9 +1202,13 @@ inline void PushQueue() {
     CalcDepth();
     int task = common::next_important_task[input::N];
     int last_task = input::N;
-    cout << "# all tasks: ";
+    if constexpr (DEBUG_STATS) {
+        cout << "# all tasks: ";
+    }
     while (common::task_queue.size() < MAX_N_MINIMIZATION_TASKS && task != input::N) {
-        cout << task << ",";
+        if constexpr (DEBUG_STATS) {
+            cout << task << ",";
+        }
         if ((common::depth[task] != 0 && common::n_not_open_tasks_in_queue >= MAX_N_NOT_OPEN_TASKS_IN_QUEUE) ||
             common::depth[task] >= 5) { // open でないタスクをキューに入れるのは 60 個とかに抑える
             last_task = task;
@@ -1216,10 +1224,12 @@ inline void PushQueue() {
         task = common::next_important_task[task];
         common::next_important_task[last_task] = task;
     }
-    cout << endl;
-    cout << "# task_queue.size()=" << common::task_queue.size() << endl;
-    cout << "# task_queue:";
-    common::task_queue.Print();
+    if constexpr (DEBUG_STATS) {
+        cout << endl;
+        cout << "# task_queue.size()=" << common::task_queue.size() << endl;
+        cout << "# task_queue:";
+        common::task_queue.Print();
+    }
 }
 
 inline void UpdateQueue() {
@@ -1432,9 +1442,10 @@ inline void SolveLoopLP() {
                 queue_update_flag = true;
             }
         }
-        cout << "# n_completed_tasks=" << n_completed_tasks << endl;
-        cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
-
+        if constexpr (DEBUG_STATS) {
+            cout << "# n_completed_tasks=" << n_completed_tasks << endl;
+            cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
+        }
         // タスクキューの更新
         if (queue_update_flag)
             UpdateQueue();
@@ -1543,6 +1554,8 @@ inline void SolveLoopLP() {
 }
 
 void Solve() {
+    cout << "# rng.seed=" << common::rng.seed << endl;
+
     // 1. 初期化
     {
         // 入力の読み込み
@@ -1615,11 +1628,12 @@ void Solve() {
 
             UpdateQueue();
         }
-
-        rep(i, input::N) { cout << "# task=" << i << " level=" << common::level[i] << endl; }
-        cout << "# task_queue: ";
-        common::task_queue.Print();
-        cout << "# n_not_open_tasks_in_queue=" << common::n_not_open_tasks_in_queue << endl;
+        if constexpr (DEBUG_STATS) {
+            rep(i, input::N) { cout << "# task=" << i << " level=" << common::level[i] << endl; }
+            cout << "# task_queue: ";
+            common::task_queue.Print();
+            cout << "# n_not_open_tasks_in_queue=" << common::n_not_open_tasks_in_queue << endl;
+        }
     }
 
     Day1();
@@ -1629,7 +1643,6 @@ void Solve() {
 int main() {
     // std::this_thread::sleep_for(std::chrono::seconds(10));
     Solve();
-    // TODO
 }
 
 #ifdef __clang__

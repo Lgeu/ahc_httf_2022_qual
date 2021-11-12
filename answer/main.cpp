@@ -1158,10 +1158,14 @@ inline array<int, input::M> Match() {
         rep(idx_task, task_candidates.size()) {
             const auto& task = task_candidates[idx_task];
             auto cost = prediction::expected_time[task][member];
+            auto time_until_start = 0.0;
+            if (common::member_status[member] != -1)
+                time_until_start = max(1.0, common::expected_complete_dates[member] - common::day);
             if (common::in_dims[task] >= 1) {
                 ASSERT(common::expected_open_date[task] != 0.0, "設定されてないとおかしい");
-                cost += max(1.0, common::expected_open_date[task] - common::day);
+                chmax(time_until_start, max(1.0, common::expected_open_date[task] - common::day));
             }
+            cost += time_until_start;
             mcf.add_edge(member, task_node_offset + idx_task, 1, (int)round(cost));
         }
     }

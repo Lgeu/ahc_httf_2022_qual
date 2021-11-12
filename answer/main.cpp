@@ -702,6 +702,7 @@ auto d = array<array<int, 20>, N>();                       // 各タスクの要
 alignas(64) auto d_double = array<array<double, 20>, N>(); // 各タスクの要求技能レベル
 auto edges = Stack<Edge, 3000>();
 auto G = Graph<1000, 3000>();
+auto rev_G = Graph<1000, 3000>();
 } // namespace input
 
 // ========================== common ==========================
@@ -1593,24 +1594,28 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
     fill(task_idxs.begin(), task_idxs.end(), -1);
     rep(v, tasks.size()) {
         const auto& task = tasks[v];
-        task_idxs[task] = true;
+        task_idxs[task] = v;
     }
     static auto rev_edges = Stack<Edge, 3000>();
     rev_edges.clear();
     rep(v, tasks.size()) {
-        const auto& v_task = tasks[v];
         for (const auto& u_task : input::G[v]) {
-            rev_edges.push({task_idxs[u_task], v});
+            if (task_idxs[u_task] != -1)
+                rev_edges.push({task_idxs[u_task], v});
         }
     }
     static auto G = Graph<50, 3000>();
     new (&G) Graph<50, 3000>(tasks.size(), rev_edges);
-    static auto initial_end_time = array<double, input::M>();
+    // cout << "# G.edges=";
+    // G.edges.Print();
+    // cout << "# G.lefts=";
+    // G.lefts.Print();
+    static auto initial_end_time = array<double, MAX_N_MINIMIZATION_TASKS_ANNEAL>();
+    fill(initial_end_time.begin(), initial_end_time.end(), 0.0);
     rep(member, input::M) {
-        if (member_status[member] == -1)
-            initial_end_time[member] = 0.0;
-        else
-            initial_end_time[member] = max(1.0, expected_complete_dates[member] - (double)common::day);
+        const auto& task = member_status[member];
+        if (task != 0.0)
+            initial_end_time[task] = max(1.0, expected_complete_dates[member] - (double)common::day);
     }
 
     // 焼きなまし状態
@@ -1633,9 +1638,12 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
         auto end_time = initial_end_time;
         auto res = SimulationResult{};
         rep(v, tasks.size()) {
+            // cout << "# v=" << v << endl;
             for (const auto& p : G[v]) {
+                // cout << "# p=" << p << endl;
                 chmax(end_time[v], end_time[p]);
             }
+            // cout << "# out" << endl;
             const auto& v_task = tasks[v];
             const auto& t = expected_time[v_task][tmp_res[v]];
             end_time[v] += t;
@@ -1666,7 +1674,7 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
         } else {
             // 移動
             const auto task = rng.randint(tasks.size());
-            const auto member = rng.randint(tasks.size());
+            const auto member = rng.randint(input::M);
             if (tmp_res[task] == member)
                 continue;
             const auto old_member = tmp_res[task];
@@ -1682,10 +1690,13 @@ inline void Anneal(const Stack<int, MAX_N_MINIMIZATION_TASKS>& tasks) {
     }
 
     // 結果
+    cout << "# tmp_res:";
     rep(i, tasks.size()) {
+        cout << " " << tmp_res[i];
         const auto& task = tasks[i];
         annealing_result[task] = tmp_res[i];
     }
+    cout << endl;
 }
 
 void SolveLoopAnneal() {
@@ -1695,6 +1706,8 @@ void SolveLoopAnneal() {
     // 2 日目以降
 
     static auto member_task_queue = array<Stack<int, MAX_N_MINIMIZATION_TASKS_ANNEAL>, input::M>();
+    static auto next_same_member_task = array<int, input::N>();
+    fill(next_same_member_task.begin(), next_same_member_task.end(), -1);
     for (day = 2;; day++) {
         int n;
         cin >> n;
@@ -1735,7 +1748,16 @@ void SolveLoopAnneal() {
         }
         cout << "# n_completed_tasks=" << n_completed_tasks << endl;
         cout << "# task_queue.size()=" << task_queue.size() << " n_not_open_tasks_in_queue=" << n_not_open_tasks_in_queue << endl;
+        cout << "# open_task_queue.size()=" << open_task_queue.size() << endl;
 
+        // 現在の遅れてるタスクとかを更新
+        rep(member, input::M) {
+            if (member_status[member] == -1) {
+                chmax(expected_complete_dates[member], day);
+            } else {
+                chmax(expected_complete_dates[member], day + 1.0);
+            }
+        }
         // タスクキューの更新
         if (queue_update_flag) {
             UpdateQueueAnneal();
@@ -1752,21 +1774,39 @@ void SolveLoopAnneal() {
             rep(i, task_queue.size()) {
                 const auto& task = task_queue[i];
                 const auto& member = annealing_result[task];
+                cout << "# member=" << member << " task=" << task << endl;
                 member_task_queue[member].push(task);
+            }
+            rep(member, input::M) {
+                const auto& q = member_task_queue[member];
+                if (q.size()) {
+                    if (member_status[member] != -1) {
+                        next_same_member_task[member_status[member]] = q.front();
+                    }
+                    rep(i, q.size() - 1) { next_same_member_task[q[i]] = q[i + 1]; }
+                }
             }
         }
 
         // 終了予定時刻の更新
         if (n_completed_tasks >= QUEUE_UPDATE_FREQUENCY_ANNEAL) {
-            for (const auto& task : task_queue) {
-                expected_task_complete_dates[task] = 0.0;
-            }
+            // fill(expected_task_complete_dates.begin(), expected_task_complete_dates.end(), (double)day);
+            // for (const auto& task : task_queue) {
+            //     expected_task_complete_dates[task] = day;
+            // }
+
+            // 先行するタスクが全て終わっており、かつ自分の前のタスクも終わっているとき、次の自分のタスクを開始できる
+
             rep(member, input::M) {
                 if (member_status[member] != -1) {
                     const auto& task = member_status[member];
-                    chmax(expected_complete_dates[member], day + 1.0);
                     chmax(expected_task_complete_dates[task], expected_complete_dates[member]);
                     for (const auto& u : input::G[task]) {
+                        chmax(expected_task_complete_dates[u],
+                              expected_task_complete_dates[task] + prediction::expected_time[u][annealing_result[u]]);
+                    }
+                    const auto& u = next_same_member_task[task];
+                    if (u != -1) {
                         chmax(expected_task_complete_dates[u],
                               expected_task_complete_dates[task] + prediction::expected_time[u][annealing_result[u]]);
                     }
@@ -1776,15 +1816,46 @@ void SolveLoopAnneal() {
                 for (const auto& u : input::G[v]) {
                     chmax(expected_task_complete_dates[u], expected_task_complete_dates[v] + prediction::expected_time[u][annealing_result[u]]);
                 }
+                const auto& u = next_same_member_task[v];
+                if (u != -1) {
+                    chmax(expected_task_complete_dates[u], expected_task_complete_dates[v] + prediction::expected_time[u][annealing_result[u]]);
+                }
             }
         }
 
-        cout << "# 各メンバーの次のタスクの着手可能時刻:";
-        rep(member, input::M) {
-            cout << " "
-                 << (member_task_queue[member].size() ? expected_task_complete_dates[member_task_queue[member].front()] -
-                                                            prediction::expected_time[member_task_queue[member].front()][member]
-                                                      : -999.9);
+        if constexpr (DEBUG_STATS) {
+            cout << "# member_status:";
+            rep(member, input::M) cout << " " << member_status[member];
+            cout << endl;
+
+            cout << "# 各メンバーの現在のタスクの終了見込み時刻:";
+            rep(member, input::M) { cout << " " << expected_complete_dates[member]; }
+            cout << endl;
+
+            cout << "# 各メンバーの次のタスク:";
+            rep(member, input::M) { cout << " " << (member_task_queue[member].size() ? member_task_queue[member].front() : -1); }
+            cout << endl;
+
+            cout << "# 各メンバーの次のタスクにかかる時間:";
+            rep(member, input::M) {
+                cout << " " << (member_task_queue[member].size() ? prediction::expected_time[member_task_queue[member].front()][member] : -999.9);
+            }
+            cout << endl;
+
+            cout << "# 各メンバーの次のタスクの終了見込み時刻:";
+            rep(member, input::M) {
+                cout << " " << (member_task_queue[member].size() ? expected_task_complete_dates[member_task_queue[member].front()] : -999.9);
+            }
+            cout << endl;
+
+            cout << "# 各メンバーの次のタスクの着手可能時刻:";
+            rep(member, input::M) {
+                cout << " "
+                     << (member_task_queue[member].size() ? expected_task_complete_dates[member_task_queue[member].front()] -
+                                                                prediction::expected_time[member_task_queue[member].front()][member]
+                                                          : -999.9);
+            }
+            cout << endl;
         }
 
         // 着手
@@ -1893,6 +1964,10 @@ void Solve() {
 
         // グラフ作成
         new (&input::G) decltype(input::G)(input::N, input::edges);
+        static auto rev_edges = input::edges;
+        for (auto&& e : rev_edges)
+            swap(e.from, e.to);
+        new (&input::rev_G) decltype(input::rev_G)(input::N, rev_edges);
 
         // 予測関連初期化
         prediction::Initialize();

@@ -691,14 +691,14 @@ constexpr auto DEBUG_STATS = true;
 
 constexpr auto MAX_N_MINIMIZATION_TASKS = 100;
 constexpr auto MCMC_N_SAMPLING = 4000;
-constexpr auto MCMC_Q_L2_NORM_RANGE = 8.201395862095833;           // OPTIMIZE LOG [2.0, 20.0]
-constexpr auto MCMC_Q_RANGE = 1.440298079563644;                   // OPTIMIZE LOG [0.2, 10.0]
-constexpr auto EXPECTED_SKILL_EMA_ALPHA_COEF = 0.7922967787541187; // OPTIMIZE LOG [0.02, 2.0]
+constexpr auto MCMC_Q_L2_NORM_RANGE = 10.267628509229075;       // OPTIMIZE LOG [2.0, 20.0]
+constexpr auto MCMC_Q_RANGE = 1.0153075845680979;               // OPTIMIZE LOG [0.2, 10.0]
+constexpr auto EXPECTED_SKILL_EMA_ALPHA_COEF = 0.6045282352156; // OPTIMIZE LOG [0.02, 2.0]
 constexpr auto EXPECTED_SKILL_EMA_ALPHA = EXPECTED_SKILL_EMA_ALPHA_COEF / MCMC_N_SAMPLING;
 constexpr auto QUEUE_UPDATE_FREQUENCY = 40;
-constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 75; // OPTIMIZE [60, 100]
-constexpr auto PRIORITY_DAY_OFFSET = 638;          // OPTIMIZE [400, 1200]
-constexpr auto PRIORITY_COEF = 0.0681319504344832; // OPTIMIZE LOG [0.002, 2.0]
+constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 92;   // OPTIMIZE [60, 100]
+constexpr auto PRIORITY_DAY_OFFSET = 457;            // OPTIMIZE [400, 1200]
+constexpr auto PRIORITY_COEF = 0.010745325414938126; // OPTIMIZE LOG [0.002, 2.0]
 
 constexpr auto E4 = 1.8128049541109541;        // N[Integrate[E^(-t^4),{t,-Infinity,Infinity}]]
 constexpr auto V4 = 0.612708351232588822 / E4; // N[Integrate[t^2 E^(-t^4),{t,-Infinity,Infinity}]]

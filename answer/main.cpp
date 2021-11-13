@@ -700,6 +700,9 @@ constexpr auto MAX_N_NOT_OPEN_TASKS_IN_QUEUE = 75; // OPTIMIZE [60, 100]
 constexpr auto PRIORITY_DAY_OFFSET = 638;          // OPTIMIZE [400, 1200]
 constexpr auto PRIORITY_COEF = 0.0681319504344832; // OPTIMIZE LOG [0.002, 2.0]
 
+constexpr auto E4 = 1.8128049541109541;        // N[Integrate[E^(-t^4),{t,-Infinity,Infinity}]]
+constexpr auto V4 = 0.612708351232588822 / E4; // N[Integrate[t^2 E^(-t^4),{t,-Infinity,Infinity}]]
+
 namespace input {
 constexpr auto N = 1000;                                   // タスク数
 constexpr auto M = 20;                                     // 人数
@@ -838,6 +841,8 @@ struct State {
     double l2_norm;                      // パラメータ, 事前分布は一様分布
     double log_alpha;                    // 採択率に比例する感じのやつの対数
     int member;                          // メンバー
+    double A4;
+
     // 最終的な α は パラメータ1の事前確率 x パラメータ2の事前確率 x ... x 尤度
     // 尤度 = f(max(1, Ramp(d1-s1) + Ramp(d2-s2) + ... + Ramp(dk-sk)) - 実際にかかった時間) のすべての完了タスクに対する総積
     // ただし f は正規分布 N(0, 6^2 / 12) の確率密度関数 (に比例する値) (本当は一様分布)
@@ -856,6 +861,7 @@ struct State {
         const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5;
         log_alpha = sum_log_prior_probabilities;
         member = member_;
+        A4 = sqrt((V4 * V4) * (V4 * V4) / 256.0);
     }
 
     inline void AddCompletedTask() {
@@ -871,7 +877,7 @@ struct State {
             sum_ramps[idx_completed_tasks] += ramps[skill][idx_completed_tasks];
         }
         const auto w = max(1.0, sum_ramps[idx_completed_tasks]) - completed_task.t;
-        log_likelihood += w * w * (-1.0 / (2.0 * 6.0 * 6.0 / 12.0));
+        log_likelihood += (w * w) * (w * w) * -A4;
         const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5;
         log_alpha = sum_log_prior_probabilities + log_likelihood;
     }
@@ -901,7 +907,7 @@ struct State {
             rep(idx_completed_tasks, common::completed_tasks[member].size()) {
                 const auto& completed_task = common::completed_tasks[member][idx_completed_tasks];
                 const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
-                new_log_likelihood += w * w;
+                new_log_likelihood += (w * w) * (w * w);
             }
 
             // rep(idx_completed_tasks, common::completed_tasks[member].size()) {
@@ -915,7 +921,7 @@ struct State {
             //     const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
             //     new_log_likelihood += w * w;
             // }
-            new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
+            new_log_likelihood *= -A4;
             const auto sum_log_prior_probabilities = sum_square_skills_base * -0.5; // これは変わらない
             const auto new_log_alpha = sum_log_prior_probabilities + new_log_likelihood;
             const auto p = exp(new_log_alpha - log_alpha); // 採択率
@@ -967,7 +973,7 @@ struct State {
                 new_sum_ramps[idx_completed_tasks + 1] = sum_ramps[idx_completed_tasks + 1] + ramp_1 - ramps[skill][idx_completed_tasks + 1];
                 const auto w_0 = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task_0.t;
                 const auto w_1 = max(1.0, new_sum_ramps[idx_completed_tasks + 1]) - completed_task_1.t;
-                new_log_likelihood += w_0 * w_0 + w_1 * w_1;
+                new_log_likelihood += ((w_0 * w_0) * (w_0 * w_0)) + ((w_1 * w_1) * (w_1 * w_1));
             }
             rep3(idx_completed_tasks, common::completed_tasks[member].size() / 2 * 2, common::completed_tasks[member].size()) {
                 // rep(idx_completed_tasks, common::completed_tasks[member].size()) {
@@ -976,9 +982,9 @@ struct State {
                 new_ramps[idx_completed_tasks] = ramp;
                 new_sum_ramps[idx_completed_tasks] = sum_ramps[idx_completed_tasks] + ramp - ramps[skill][idx_completed_tasks];
                 const auto w = max(1.0, new_sum_ramps[idx_completed_tasks]) - completed_task.t;
-                new_log_likelihood += w * w;
+                new_log_likelihood += (w * w) * (w * w);
             }
-            new_log_likelihood *= -1.0 / (2.0 * 6.0 * 6.0 / 12.0);
+            new_log_likelihood *= -A4;
             const auto new_sum_log_prior_probabilities = new_sum_square_skills_base * -0.5;
             const auto new_log_alpha = new_sum_log_prior_probabilities + new_log_likelihood;
             const auto p = exp(new_log_alpha - log_alpha); // 採択率
